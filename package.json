@@ -1,0 +1,17 @@
+{
+  "name": "detective-board-sync",
+  "version": "1.0.0",
+  "description": "Real-time asynchronous co-op detective mystery game played on a shared digital corkboard",
+  "main": "server/src/index.ts",
+  "scripts": {
+    "setup": "npm install && cd server && npm install && cd ../client && npm install",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "cd server && npm run build && cd ../client && npm run build",
+    "start": "cd server && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
