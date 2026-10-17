@@ -1,95 +1,62 @@
 import React, { useState } from 'react';
-import { BoardString } from '../types';
-import { X, GitCommit } from 'lucide-react';
+import { StringLabel } from '../types';
+import { useI18n, TKey } from '../i18n';
+import { STRING_COLORS } from '../cardInfo';
 
 interface StringTagModalProps {
-  onConfirm: (label: BoardString['label'], color?: string) => void;
+  onConfirm: (label: StringLabel) => void;
   onCancel: () => void;
 }
 
-export const StringTagModal: React.FC<StringTagModalProps> = ({ onConfirm, onCancel }) => {
-  const [selectedTag, setSelectedTag] = useState<BoardString['label']>('Suspicious Link');
-  const [customColor, setCustomColor] = useState<string>('#d63031');
+const LABELS: StringLabel[] = ['link', 'motive', 'weapon', 'contradiction', 'alibi'];
 
-  const options: { label: BoardString['label']; desc: string; defaultColor: string }[] = [
-    { label: 'Suspicious Link', desc: 'Crimson Thread: Links suspect to crime scene or victim', defaultColor: '#d63031' },
-    { label: 'Motive', desc: 'Gold Thread: Links financial benefit or blackmail evidence', defaultColor: '#f1c40f' },
-    { label: 'Contradiction', desc: 'Cyan Thread: Exposes conflicting alibis or CCTV timestamps', defaultColor: '#00cec9' },
-    { label: 'Alibi', desc: 'Green Thread: Proves suspect presence elsewhere during murder', defaultColor: '#2ecc71' }
-  ];
+export const StringTagModal: React.FC<StringTagModalProps> = ({ onConfirm, onCancel }) => {
+  const { t } = useI18n();
+  const [selected, setSelected] = useState<StringLabel>('link');
 
   return (
-    <div onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }} className="modal-overlay">
-      <div className="modal-content max-w-md font-courier text-amber-100 relative space-y-4">
-        
-        <button
-          onClick={onCancel}
-          className="absolute top-4 right-4 text-amber-400 hover:text-white p-1 rounded-full bg-black/40"
-        >
-          <X size={18} />
-        </button>
-
-        <div className="flex items-center gap-2 border-b border-amber-900/40 pb-2">
-          <GitCommit size={20} className="text-amber-400" />
-          <h3 className="font-bold font-typewriter text-lg text-amber-100">
-            CONNECT THREAD DEDUCTION
-          </h3>
-        </div>
-
-        <p className="text-xs text-amber-300/80">
-          Select the investigative relationship to connect these two evidence pins:
-        </p>
-
-        <div className="space-y-2">
-          {options.map((opt) => (
-            <div
-              key={opt.label}
-              onClick={() => {
-                setSelectedTag(opt.label);
-                setCustomColor(opt.defaultColor);
-              }}
-              className={`p-3 rounded border cursor-pointer transition ${
-                selectedTag === opt.label
-                  ? 'bg-amber-950 border-amber-400 text-amber-100 shadow-md'
-                  : 'bg-black/40 border-amber-900/30 text-amber-400/80 hover:bg-black/60'
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <form
+        className="sheet w-full max-w-sm rounded-xl panel p-5 shadow-2xl"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onConfirm(selected);
+        }}
+        onKeyDown={(e) => e.key === 'Escape' && onCancel()}
+      >
+        <h3 className="font-typewriter text-xl text-[var(--paper)]">{t('string.title')}</h3>
+        <div className="mt-4 space-y-1" role="radiogroup">
+          {LABELS.map((label, i) => (
+            <button
+              key={label}
+              type="button"
+              role="radio"
+              aria-checked={selected === label}
+              autoFocus={i === 0}
+              onClick={() => setSelected(label)}
+              onDoubleClick={() => onConfirm(label)}
+              className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                selected === label ? 'bg-white/[0.07]' : 'hover:bg-white/[0.03]'
               }`}
             >
-              <div className="flex items-center justify-between font-mono font-bold text-xs">
-                <span className="flex items-center gap-2">
-                  <span
-                    className="w-3 h-3 rounded-full border border-white/40"
-                    style={{ backgroundColor: opt.defaultColor }}
-                  />
-                  {opt.label.toUpperCase()}
-                </span>
-                {selectedTag === opt.label && (
-                  <span className="text-[10px] text-amber-300">SELECTED ✓</span>
-                )}
-              </div>
-              <p className="text-[11px] text-amber-200/70 mt-1 pl-5">
-                {opt.desc}
-              </p>
-            </div>
+              <span className="h-[3px] w-7 rounded-full shrink-0" style={{ background: STRING_COLORS[label] }} />
+              <span className="flex-1">
+                <span className="block text-[14px] font-semibold text-[var(--text)]">{t(`string.${label}` as TKey)}</span>
+                <span className="block text-[12.5px] text-[var(--text-dim)]">{t(`string.${label}.desc` as TKey)}</span>
+              </span>
+              <span className={`h-4 w-4 rounded-full border-2 ${selected === label ? 'border-[var(--brass)] bg-[var(--brass)]' : 'border-[var(--line-strong)]'}`} />
+            </button>
           ))}
         </div>
-
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            onClick={onCancel}
-            className="tag-button"
-          >
-            CANCEL
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            {t('board.cancel')}
           </button>
-
-          <button
-            onClick={() => onConfirm(selectedTag, customColor)}
-            className="pin-button"
-          >
-            CONNECT THREAD
+          <button type="submit" className="btn btn-primary">
+            {t('string.tie')}
           </button>
         </div>
-
-      </div>
+      </form>
     </div>
   );
 };

@@ -1,24 +1,38 @@
-import { MysteryCase, Suspect, EvidenceItem } from './types.js';
+import {
+  Difficulty, EvidenceKind, Lang, PublicEvidence, PublicMystery, PublicSuspect, Role, Solution, ThemeKey, TraitDim,
+} from './types.js';
+import {
+  ANALYST_DIMS, CAUSES, LEAD_DIMS, MOTIVES, T, TEXT, TRAITS, fill,
+} from './content/common.js';
+import { THEMES, THEME_KEYS } from './content/themes.js';
 
-// ─── Seeded Pseudo-Random Number Generator (LCG) ─────────────────────────────
+// ─── Seeded RNG (xmur3 hash + mulberry32) ────────────────────────────────────
 class SeededRandom {
-  private seed: number;
+  private state: number;
 
   constructor(seedStr: string) {
-    let hash = 0;
+    let h = 1779033703 ^ seedStr.length;
     for (let i = 0; i < seedStr.length; i++) {
-      hash = (hash << 5) - hash + seedStr.charCodeAt(i);
-      hash |= 0;
+      h = Math.imul(h ^ seedStr.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
     }
-    this.seed = Math.abs(hash) || 123456789;
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    this.state = (h ^ (h >>> 16)) >>> 0;
   }
 
   next(): number {
-    this.seed = (this.seed * 9301 + 49297) % 233280;
-    return this.seed / 233280;
+    let a = (this.state += 0x6d2b79f5);
+    a = Math.imul(a ^ (a >>> 15), a | 1);
+    a ^= a + Math.imul(a ^ (a >>> 7), a | 61);
+    return ((a ^ (a >>> 14)) >>> 0) / 4294967296;
   }
 
-  getRandom<T>(arr: T[]): T {
+  int(min: number, max: number): number {
+    return min + Math.floor(this.next() * (max - min + 1));
+  }
+
+  pick<T>(arr: T[]): T {
     return arr[Math.floor(this.next() * arr.length)];
   }
 
@@ -30,372 +44,502 @@ class SeededRandom {
     }
     return result;
   }
-}
 
-// ─── Per-Theme Narrative Templates ───────────────────────────────────────────
-interface ThemeNarrative {
-  suspectBioSuffixes: string[];
-  killerFakeAlibiLocation: string;
-  killerFakeAlibiTimeframe: string;
-  killerCctvTitle: string;
-  killerCctvDetail: (killerName: string) => string;
-  innocentAlibiDetail: (innocentName: string) => string;
-  motiveDocTitle: (killerName: string) => string;
-  motiveDocLocation: string;
-  motiveDocDetail: (killerName: string, motiveText: string) => string;
-  weaponDiscoveryLocation: string;
-  autopsyTitle: (victimName: string) => string;
-  autopsyDetail: (victimName: string, weaponName: string) => string;
-  synopsis: (victimName: string, occupation: string, location: string, numSuspects: number) => string;
-}
-
-const THEME_NARRATIVES: Record<string, ThemeNarrative> = {
-  gothic: {
-    suspectBioSuffixes: [
-      'was a frequent visitor to the estate and was seen arguing with the victim three days prior to the incident',
-      'resided in the east guest wing on the night of the murder with unrestricted access to all manor rooms',
-      'held a long-standing grievance over the contested inheritance terms of the Thorne estate will',
-    ],
-    killerFakeAlibiLocation: 'the Grand Hotel dining room',
-    killerFakeAlibiTimeframe: '9:30 PM to 11:00 PM',
-    killerCctvTitle: 'CCTV Log: Grand Hotel Gate Camera',
-    killerCctvDetail: (name) =>
-      `${name}'s vehicle departed the Grand Hotel at 9:50 PM and returned at 10:55 PM — a 65-minute absence that directly contradicts the stated dining alibi. The concierge confirms no reservation was recorded for that evening.`,
-    innocentAlibiDetail: (name) =>
-      `Cross-referenced cell tower pings and a signed restaurant voucher confirm ${name} was 15 miles from the manor during the 10:00 PM to 10:30 PM murder window. Alibi VERIFIED.`,
-    motiveDocTitle: (name) => `Document: ${name}'s Hidden Financial Ledger`,
-    motiveDocLocation: "concealed behind a false panel in the victim's private study bookshelf",
-    motiveDocDetail: (name, motive) =>
-      `Handwritten ledger recording a secret debt of 450,000 pounds owed to unnamed creditors. A margin annotation reads: "Settlement by any means." Motive confirmed: ${motive}.`,
-    weaponDiscoveryLocation:
-      'Recovered from the manor wine cellar waste bin, wrapped in a monogrammed handkerchief',
-    autopsyTitle: (victim) => `Coroner's Report: ${victim}`,
-    autopsyDetail: (_victim, weapon) =>
-      `Time of Death estimated between 10:10 PM and 10:30 PM. Cause: lethal exposure via ${weapon.toLowerCase()}. No defensive wounds present — victim was unaware of the approach.`,
-    synopsis: (victim, occupation, location, count) =>
-      `On a fog-laden evening, ${victim} (${occupation}) was discovered lifeless in the ${location}. The manor's iron gates were locked from within. ${count} individuals with access to the estate grounds are under suspicion. Cross-examine testimonies, analyze forensic specimens, and unmask the killer before dawn breaks.`,
-  },
-
-  cyber: {
-    suspectBioSuffixes: [
-      'held active Level-5 security clearance to all restricted server vaults and was flagged by the AI for unauthorized corridor movement at 10:05 PM',
-      'recently filed a formal complaint against the victim over disputed neural-interface patent ownership',
-      'was the last authenticated user to access the victim\'s encrypted research drive before the incident',
-    ],
-    killerFakeAlibiLocation: 'the Sub-Level 2 Biometric Lounge',
-    killerFakeAlibiTimeframe: '9:15 PM to 11:30 PM',
-    killerCctvTitle: 'Access Log: Sector 7 Biometric Door Scanner',
-    killerCctvDetail: (name) =>
-      `${name}'s retinal scan was authenticated at the Sector 7 bulkhead door at 10:02 PM, eight minutes before the estimated time of death, placing them at the scene rather than in the Biometric Lounge. A secondary badge-spoof attempt was simultaneously logged and flagged by the building AI.`,
-    innocentAlibiDetail: (name) =>
-      `Network session logs, AI corridor surveillance, and lounge biometric check-ins corroborate that ${name} remained inside the Biometric Lounge from 9:15 PM to 11:10 PM without interruption. Alibi CORROBORATED by three independent data sources.`,
-    motiveDocTitle: (name) => `Encrypted Drive: ${name}'s Stolen IP Archive`,
-    motiveDocLocation:
-      "recovered from a hidden data partition on a wiped terminal in the server vault anteroom",
-    motiveDocDetail: (name, motive) =>
-      `Decrypted files reveal unauthorized copies of classified neural synthesis formulas and a concealed transaction history. Root access logs trace back to ${name}'s authenticated terminal session. Motive confirmed: ${motive}.`,
-    weaponDiscoveryLocation:
-      "Extracted from a shielded emergency compartment beneath the victim's desk console, still in an active state",
-    autopsyTitle: (victim) => `Bio-Forensic Analysis Report: ${victim}`,
-    autopsyDetail: (_victim, weapon) =>
-      `Neural flatline confirmed at approximately 10:18 PM. Cause: targeted application of ${weapon.toLowerCase()}. No physical resistance detected — victim appears to have been remotely immobilized before final contact was made.`,
-    synopsis: (victim, occupation, location, count) =>
-      `At 10:22 PM, automated vital-sign monitors registered flatline for ${victim} (${occupation}), found unresponsive in the ${location}. The building AI flagged an unauthorized access event 4 minutes prior. ${count} personnel with Level-5 clearance are under active investigation. Decrypt the evidence chain and expose the operative before all logs are permanently wiped.`,
-  },
-
-  opera: {
-    suspectBioSuffixes: [
-      'held exclusive backstage access and was overheard threatening the victim in the dressing room corridor after the final rehearsal',
-      'was spotted near the victim\'s private dressing room at approximately 10:00 PM by two separate stagehands',
-      'carried a decade-long rivalry with the victim over lead performance credits, royalty shares, and the upcoming world tour contract',
-    ],
-    killerFakeAlibiLocation: "the Maestro's private rehearsal parlour",
-    killerFakeAlibiTimeframe: '9:45 PM to 11:15 PM',
-    killerCctvTitle: 'Stage Log: Backstage Movement Register',
-    killerCctvDetail: (name) =>
-      `The head stagehand's movement register places ${name} near Stage Door B at 10:08 PM, not in the rehearsal parlour as claimed. A second witness heard raised voices in the backstage corridor at that precise time, consistent with a confrontation.`,
-    innocentAlibiDetail: (name) =>
-      `Box office staff and two attending music critics confirm ${name} remained at the post-performance press gathering in the Grand Foyer from 9:50 PM through 10:50 PM. Alibi CONFIRMED by multiple independent witnesses.`,
-    motiveDocTitle: (name) => `Confidential Contract: ${name}'s Disputed Royalty Amendment`,
-    motiveDocLocation:
-      "discovered folded inside the victim's personal score folio, left on the conductor's podium",
-    motiveDocDetail: (name, motive) =>
-      `A backstage contract amendment stripping ${name} of all future royalty entitlements, signed the morning of the incident. Margin notes in red ink read: "This will not stand." Motive confirmed: ${motive}.`,
-    weaponDiscoveryLocation:
-      'Discovered wedged beneath the orchestral pit staircase, partially concealed by a fallen velvet curtain',
-    autopsyTitle: (victim) => `Medical Examiner's Report: ${victim}`,
-    autopsyDetail: (_victim, weapon) =>
-      `Time of Death placed between 10:05 PM and 10:25 PM. Lethal use of ${weapon.toLowerCase()} confirmed by trace analysis. The body was deliberately arranged post-mortem, a staged scene designed to delay discovery by the stage crew.`,
-    synopsis: (victim, occupation, location, count) =>
-      `During the standing ovation of the final act, ${victim} (${occupation}) was found unresponsive in the ${location}. The opera house was sealed immediately on police orders. ${count} individuals with unrestricted backstage access have been detained for questioning. Lift the curtain of deceit and deliver justice before the press arrives at dawn.`,
-  },
-
-  casino: {
-    suspectBioSuffixes: [
-      'controlled all access credentials to the high-limit gaming floor and the private elevator used by the victim on the night of the incident',
-      'was observed in a heated, whispered exchange with the victim on the main casino floor at 9:55 PM',
-      'had recently lost a significant stake in an off-book private arrangement with the victim and carried a documented grievance on file',
-    ],
-    killerFakeAlibiLocation: 'the Casino Noir Sky Lounge Bar',
-    killerFakeAlibiTimeframe: '9:30 PM to 11:00 PM',
-    killerCctvTitle: 'Surveillance Reel: Casino Floor Cameras 7 and 11',
-    killerCctvDetail: (name) =>
-      `Casino floor surveillance cameras 7 and 11 capture ${name} exiting via the private elevator at 10:01 PM, not seated at the Sky Lounge as claimed. Elevator access logs document a 22-minute gap in their verified whereabouts with no corroborating witnesses.`,
-    innocentAlibiDetail: (name) =>
-      `Dealer testimony, chip-tracking records, and two croupier witnesses confirm ${name} was actively at Table 14 from 9:30 PM through 10:55 PM without interruption. Alibi VERIFIED by casino surveillance.`,
-    motiveDocTitle: (name) => `Encrypted USB: ${name}'s Offshore Transaction Archive`,
-    motiveDocLocation:
-      "retrieved from a concealed magnetic slot inside a hollow casino chip found in the victim's jacket pocket",
-    motiveDocDetail: (name, motive) =>
-      `Decrypted files contain a ledger of undisclosed offshore wire transfers totaling over 2.3 million dollars, traced to ${name}'s shell accounts. The final entry is dated the morning of the murder. Motive confirmed: ${motive}.`,
-    weaponDiscoveryLocation:
-      'Located inside a sealed champagne cooler in the VIP High-Limit Suite, reported anonymously to housekeeping',
-    autopsyTitle: (victim) => `Forensic Pathology Report: ${victim}`,
-    autopsyDetail: (_victim, weapon) =>
-      `Time of Death bracketed between 10:08 PM and 10:25 PM. ${weapon} confirmed as the lethal instrument. Toxicology flagged a secondary incapacitating compound in the victim's glass, administered prior to the fatal event.`,
-    synopsis: (victim, occupation, location, count) =>
-      `Security personnel discovered ${victim} (${occupation}) unresponsive in the ${location} at 10:45 PM. The private wing had been locked from inside using a stolen master keycard. ${count} guests and staff members with unrestricted access are under immediate suspicion. Follow the money, break the alibis, and make the arrest before the evidence vanishes into the vault.`,
-  },
-
-  express: {
-    suspectBioSuffixes: [
-      'occupied the directly adjoining compartment and was reportedly the last person seen in conversation with the victim before 10:00 PM',
-      'possessed the master passkey for all sleeping cars and was logged moving through multiple carriages between 9:50 PM and 10:30 PM',
-      'was carrying sealed diplomatic correspondence that the victim had reportedly threatened to intercept and expose to foreign authorities',
-    ],
-    killerFakeAlibiLocation: 'the Rear Dining Car',
-    killerFakeAlibiTimeframe: '9:40 PM to 11:10 PM',
-    killerCctvTitle: "Conductor's Log: Sealed Passenger Movement Record",
-    killerCctvDetail: (name) =>
-      `The conductor's sealed log places ${name} passing through Compartment Car 3 at 10:06 PM, the carriage directly adjacent to the victim's berth, rather than in the Rear Dining Car as stated. A passenger in Compartment 5-A reports hearing a muffled altercation at that precise hour.`,
-    innocentAlibiDetail: (name) =>
-      `Dining car steward records, a signed dinner chit, and two fellow diners confirm ${name} remained seated in the dining carriage from 9:40 PM to 10:55 PM. Alibi SUBSTANTIATED by physical receipts and witness testimony.`,
-    motiveDocTitle: (name) => `Sealed Dossier: ${name}'s Intercepted Diplomatic Dispatch`,
-    motiveDocLocation:
-      "discovered inside the victim's locked leather attache case in Compartment 3-B",
-    motiveDocDetail: (name, motive) =>
-      `An intercepted dispatch bearing a foreign embassy seal, addressed to ${name}, containing covert instructions and a classified payment schedule. Recovery of this document by the victim gave ${name} an acute motive to silence them permanently. Motive confirmed: ${motive}.`,
-    weaponDiscoveryLocation:
-      'Found wrapped in a silk handkerchief, concealed beneath a loose teak floor panel in Compartment 4-A',
-    autopsyTitle: (victim) => `Train Physician's Examination: ${victim}`,
-    autopsyDetail: (_victim, weapon) =>
-      `Death occurred between 10:00 PM and 10:20 PM, confirmed by body temperature and rigor progression. ${weapon} identified as the primary cause. The compartment showed deliberate staging, personal effects rearranged to suggest a natural death and delay the alarm.`,
-    synopsis: (victim, occupation, location, count) =>
-      `Snowbound in an Alpine pass, the Orient Express came to an unscheduled halt as ${victim} (${occupation}) was found deceased in the ${location}. With no exits and no communications, the killer is still on board. ${count} passengers with documented access to the victim's compartment are under investigation. Question every witness, dissect every alibi, and name the killer before the train reaches the next station.`,
-  },
-};
-
-// ─── Static Data Pools ────────────────────────────────────────────────────────
-const THEMES = {
-  gothic: {
-    titles: ["The Poisoned Decanter at Blackwood Manor", "The Alchemist's Sealed Laboratory", "The Crimson Thread at Thorne Hall"],
-    victimNames: ["Arthur Pendelton", "Eleanor Vance", "Baron Hector Thorne"],
-    occupations: ["Antiques Collector & Wealthy Philanthropist", "High-Society Art Dealer", "Industrial Shipping Tycoon"],
-    locations: ["Private Library, 2nd Floor Study", "Underground Wine Cellar", "Conservatory Glasshouse"]
-  },
-  cyber: {
-    titles: ["Cybertech Syndicate Homicide", "The Glitch in Sector 7", "Decommissioned AI Protocol Murder"],
-    victimNames: ["Dr. Kaelen Voss", "Seraphina Lin", "Director Marcus Kane"],
-    occupations: ["Chief Neural Engineer", "Quantum Data Broker", "Synthetic Bio-Tech CEO"],
-    locations: ["Sub-Level 4 Server Vault", "Penthouse Hologram Suite", "Neo-Tokyo Research Deck"]
-  },
-  opera: {
-    titles: ["The Silent Maestro's Final Encore", "Betrayal at the Velvet Opera", "The Midnight Aria Stabbing"],
-    victimNames: ["Maestro Julian Mercer", "Vivian Montgomery", "Clara Bellini"],
-    occupations: ["Philharmonic Conductor", "Prima Donna Soprano", "Opera House Benefactor"],
-    locations: ["VIP Backstage Dressing Room", "Grand Balcony Suite 1", "Understage Orchestra Pit"]
-  },
-  casino: {
-    titles: ["The High-Roller's Poisoned Martini", "Roulette Room Homicide at Casino Noir", "The Vault Keycard Betrayal"],
-    victimNames: ["Vincent Lucky Sterling", "Lady Cassandra Dupont", "Dominic Vance"],
-    occupations: ["Casino Syndicate Franchisee", "High-Stakes Baccarat Dealer", "Offshore Casino Managing Partner"],
-    locations: ["VIP High-Limit Suite 777", "Underground Vault Security Office", "Private Rooftop Lounge"]
-  },
-  express: {
-    titles: ["First-Class Coupe Murder on the Orient Express", "The Snowbound Engine Stabbing", "Diplomatic Pouch Secret Homicide"],
-    victimNames: ["Ambassador Montgomery Bell", "Duchess Helene Vane", "Captain Sterling Thorne"],
-    occupations: ["Special Envoy Diplomat", "European Royal Beneficiary", "Retired Imperial Guard Captain"],
-    locations: ["Compartment 3-B, Orient Express", "Rear Dining Car Kitchen", "Observation Deck Salon"]
+  id(prefix: string): string {
+    return `${prefix}-${Math.floor(this.next() * 0xffffff).toString(16).padStart(6, '0')}`;
   }
-};
+}
 
-const SUSPECT_POOL = [
-  { name: "Dr. Evelyn Reed",  role: "Personal Physician",   color: "#e74c3c" },
-  { name: "Julian Thorne",    role: "Disinherited Nephew",  color: "#3498db" },
-  { name: "Clara Bell",       role: "Private Secretary",    color: "#2ecc71" },
-  { name: "Marcus Vance",     role: "Business Rival",       color: "#f39c12" },
-  { name: "Genevieve Noir",   role: "Art Companion",        color: "#9b59b6" },
-  { name: "Garrison Ford",    role: "Head Security",        color: "#34495e" }
-];
+// ─── Blueprint: the case with no language attached ───────────────────────────
 
-const WEAPONS = [
-  { name: "Cyanide-Laced Vintage Port Decanter", type: "toxicology" },
-  { name: "Engraved Brass Stiletto Dagger",       type: "ballistics" },
-  { name: "Heavy Obsidian Desk Paperweight",      type: "fingerprint" },
-  { name: "Modified Syringe containing Digitalis", type: "autopsy" }
-];
+const ALL_DIMS: TraitDim[] = ['height', 'coat', 'voice', 'hand', 'footwear', 'habit', 'blood'];
+const SUSPECT_COLORS = ['#e17055', '#74b9ff', '#55efc4', '#fdcb6e', '#a29bfe', '#fd79a8', '#81ecec', '#fab1a0'];
 
-const MOTIVES = [
-  "Forged Will changing the estate beneficiary to 100% of holdings",
-  "Blackmail documents regarding embezzlement of millions in offshore funds",
-  "Secret romantic affair revealed in stolen private letters",
-  "Patent theft regarding a revolutionary synthetic formula"
-];
+interface BlueprintSuspect {
+  id: string;
+  seedIdx: number;
+  age: number;
+  color: string;
+  bioIdx: number;
+  placeIdx: number;
+  traits: Record<TraitDim, number>;
+  motiveIdx: number;
+  motiveOptionId: string;
+  verified: boolean;
+  noticed: 'nothing' | 'true' | 'frame';
+  frameTargetIdx?: number;
+}
 
-const VICTIM_AGES = [49, 52, 54, 57, 61, 63];
+interface BlueprintEvidence {
+  id: string;
+  role: Role;
+  kind: EvidenceKind;
+  /** suspect index (documents), place index (records), weapon index (weapons) */
+  ref?: number;
+  foundPlaceIdx?: number;
+}
 
-// ─── Generator ───────────────────────────────────────────────────────────────
-export function generateMysteryCase(
-  difficulty: 'Novice' | 'Detective' | 'Mastermind' = 'Detective',
-  themeKey: 'gothic' | 'cyber' | 'opera' | 'casino' | 'express' = 'gothic',
-  customSeed?: string
-): MysteryCase {
-  const seedStr = customSeed || `seed-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  const rng = new SeededRandom(seedStr);
-  const theme = THEMES[themeKey] || THEMES.gothic;
-  const narrative = THEME_NARRATIVES[themeKey] || THEME_NARRATIVES.gothic;
+export interface Blueprint {
+  seed: string;
+  theme: ThemeKey;
+  difficulty: Difficulty;
+  titleIdx: number;
+  victimIdx: number;
+  victimAge: number;
+  sceneIdx: number;
+  startMin: number;
+  witnessIdx: number;
+  witnessMin: number;
+  cameraIdx: number;
+  cameraMin: number;
+  phoneMin: number;
+  suspects: BlueprintSuspect[];
+  killerIdx: number;
+  clueDims: TraitDim[];
+  slip: boolean;
+  weapons: { weaponIdx: number; optionId: string }[];
+  trueWeaponIdx: number;
+  evidence: BlueprintEvidence[];
+  solution: Solution;
+}
 
-  const caseId = `case-${seedStr}`;
-  const title            = rng.getRandom(theme.titles);
-  const victimName       = rng.getRandom(theme.victimNames);
-  const victimOccupation = rng.getRandom(theme.occupations);
-  const victimLocation   = rng.getRandom(theme.locations);
-  const victimAge        = rng.getRandom(VICTIM_AGES);
+const DIFFICULTY = {
+  Novice: { suspects: 4, verified: 1, places: 3, weapons: 3, extraMotiveDocs: 1, slip: true, frame: false, prefer: 'max' },
+  Detective: { suspects: 5, verified: 2, places: 3, weapons: 3, extraMotiveDocs: 2, slip: true, frame: true, prefer: 'min+1' },
+  Mastermind: { suspects: 6, verified: 2, places: 4, weapons: 4, extraMotiveDocs: 99, slip: false, frame: true, prefer: 'min' },
+} as const;
 
-  const numSuspects = difficulty === 'Mastermind' ? 5 : 4;
-  const chosenSuspectsRaw = rng.shuffle(SUSPECT_POOL).slice(0, numSuspects);
-  const killerIndex = Math.floor(rng.next() * numSuspects);
+function matching(suspects: BlueprintSuspect[], killer: BlueprintSuspect, dims: TraitDim[], useAlibi: boolean): number {
+  return suspects.filter(s => {
+    if (useAlibi && s.verified) return false;
+    return dims.every(d => s.traits[d] === killer.traits[d]);
+  }).length;
+}
 
-  const suspects: Suspect[] = chosenSuspectsRaw.map((s, idx) => ({
-    id: `suspect-${idx + 1}`,
-    name: s.name,
-    role: s.role,
-    bio: `${s.name} served as ${victimName}'s ${s.role}. ${rng.getRandom(narrative.suspectBioSuffixes)}.`,
-    statedAlibi: idx === killerIndex
-      ? `Claims to have been in ${narrative.killerFakeAlibiLocation} from ${narrative.killerFakeAlibiTimeframe}, with no witnesses who can corroborate the account.`
-      : `States they were attending the public lecture at Town Hall until 10:45 PM, supported by several attendees.`,
-    isKiller: idx === killerIndex,
-    avatarColor: s.color,
-    photoStyle: `polaroid-${idx + 1}`
-  }));
+function chooseClueDims(rng: SeededRandom, suspects: BlueprintSuspect[], killer: BlueprintSuspect, prefer: string): TraitDim[] | null {
+  const valid: TraitDim[][] = [];
+  for (let mask = 1; mask < 1 << ALL_DIMS.length; mask++) {
+    const dims = ALL_DIMS.filter((_, i) => mask & (1 << i));
+    const leadDims = dims.filter(d => LEAD_DIMS.includes(d));
+    const analystDims = dims.filter(d => ANALYST_DIMS.includes(d));
+    if (leadDims.length === 0 || analystDims.length === 0) continue;
+    // Together the clues must point to exactly one person...
+    if (matching(suspects, killer, dims, true) !== 1) continue;
+    // ...but neither player can get there alone.
+    if (matching(suspects, killer, leadDims, true) < 2) continue;
+    if (matching(suspects, killer, analystDims, false) < 2) continue;
+    // Every clue has to rule somebody out, or it is just noise.
+    if (dims.some(d => matching(suspects, killer, [d], false) === suspects.length)) continue;
+    valid.push(dims);
+  }
+  if (valid.length === 0) return null;
 
-  const killer         = suspects[killerIndex];
-  const innocentSuspects = suspects.filter(s => !s.isKiller);
-  const weaponObj      = rng.getRandom(WEAPONS);
-  const motiveText     = rng.getRandom(MOTIVES);
+  const sizes = valid.map(v => v.length);
+  const min = Math.min(...sizes);
+  const max = Math.max(...sizes);
+  const target = prefer === 'max' ? max : prefer === 'min+1' ? Math.min(min + 1, max) : min;
+  return rng.pick(valid.filter(v => v.length === target));
+}
 
-  const evidenceList: EvidenceItem[] = [];
+export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedStr: string): Blueprint {
+  const theme = THEMES[themeKey] ? themeKey : 'gothic';
+  const th = THEMES[theme];
+  const cfg = DIFFICULTY[difficulty] || DIFFICULTY.Detective;
+  const rng = new SeededRandom(`${seedStr}|${theme}|${difficulty}`);
 
-  // Key Motive Clue -> Lead Detective (P1)
-  const motiveEvId = `ev-motive-${killer.id}`;
-  evidenceList.push({
-    id: motiveEvId,
-    title: narrative.motiveDocTitle(killer.name),
-    type: 'witness_statement',
-    assignedRole: 'lead',
-    summary: `Found ${narrative.motiveDocLocation}.`,
-    details: narrative.motiveDocDetail(killer.name, motiveText),
-    relatedSuspectId: killer.id,
-    isKeyEvidence: true,
-    tag: 'Motive',
-    iconType: 'file-text'
-  });
+  const titleIdx = rng.int(0, th.titles.length - 1);
+  const victimIdx = rng.int(0, th.victims.length - 1);
+  const sceneIdx = rng.int(0, th.scenes.length - 1);
+  const victimAge = rng.int(46, 74);
+  const startMin = rng.pick([21 * 60, 21 * 60 + 30, 22 * 60, 22 * 60 + 30]);
+  const witnessIdx = rng.int(0, th.witnesses.length - 1);
+  const cameraIdx = rng.int(0, th.cameras.length - 1);
+  const witnessMin = startMin + rng.int(6, 24);
+  const cameraMin = startMin + rng.int(3, 26);
+  const phoneMin = startMin + rng.int(4, 24);
 
-  // Key Weapon Clue -> Forensic Analyst (P2)
-  const weaponEvId = `ev-weapon-${killer.id}`;
-  evidenceList.push({
-    id: weaponEvId,
-    title: `Forensic Specimen: ${weaponObj.name}`,
-    type: weaponObj.type as any,
-    assignedRole: 'analyst',
-    summary: `${narrative.weaponDiscoveryLocation}.`,
-    details: `Physical analysis confirms trace residue matching victim's blood and tissue. A partial fingerprint ridge pattern on the instrument's handle is consistent with ${killer.name}'s on-file biometric profile.`,
-    relatedSuspectId: killer.id,
-    isKeyEvidence: true,
-    tag: 'Murder Weapon',
-    iconType: 'flask-conical'
-  });
+  const seedIdxs = rng.shuffle(th.suspects.map((_, i) => i)).slice(0, cfg.suspects);
+  const placeIdxs = rng.shuffle(th.alibiPlaces.map((_, i) => i)).slice(0, cfg.places);
+  const motiveIdxs = rng.shuffle(MOTIVES.map((_, i) => i));
+  const bioIdxs = rng.shuffle(th.bioLines.map((_, i) => i));
+  const colors = rng.shuffle(SUSPECT_COLORS);
 
-  // Key Alibi Contradiction -> Lead Detective (P1)
-  const contradictionEvId = `ev-alibi-${killer.id}`;
-  evidenceList.push({
-    id: contradictionEvId,
-    title: narrative.killerCctvTitle,
-    type: 'cctv_report',
-    assignedRole: 'lead',
-    summary: `Time-stamped movement record — direct alibi contradiction.`,
-    details: narrative.killerCctvDetail(killer.name),
-    relatedSuspectId: killer.id,
-    isKeyEvidence: true,
-    tag: 'Contradiction',
-    iconType: 'video'
-  });
+  // Roll traits until the deduction puzzle is uniquely solvable and truly co-op.
+  let suspects: BlueprintSuspect[] = [];
+  let killerIdx = 0;
+  let clueDims: TraitDim[] | null = null;
+  for (let attempt = 0; attempt < 500 && !clueDims; attempt++) {
+    killerIdx = rng.int(0, cfg.suspects - 1);
+    const innocents = rng.shuffle(seedIdxs.map((_, i) => i).filter(i => i !== killerIdx));
+    const verifiedSet = new Set(innocents.slice(0, cfg.verified));
+    suspects = seedIdxs.map((seedIdx, i) => ({
+      id: '',
+      seedIdx,
+      age: 0,
+      color: colors[i % colors.length],
+      bioIdx: bioIdxs[i % bioIdxs.length],
+      placeIdx: rng.pick(placeIdxs),
+      traits: {
+        height: rng.int(0, TRAITS.height.length - 1),
+        coat: rng.int(0, TRAITS.coat.length - 1),
+        hand: rng.next() < 0.3 ? 0 : 1, // left-handers are rarer
+        footwear: rng.int(0, TRAITS.footwear.length - 1),
+        habit: rng.int(0, TRAITS.habit.length - 1),
+        voice: rng.int(0, TRAITS.voice.length - 1),
+        blood: rng.pick([0, 0, 1, 2, 3, 3, 3]), // A and O are the common types
+      },
+      motiveIdx: motiveIdxs[i % motiveIdxs.length],
+      motiveOptionId: '',
+      verified: verifiedSet.has(i),
+      noticed: 'nothing',
+    }));
+    clueDims = chooseClueDims(rng, suspects, suspects[killerIdx], cfg.prefer);
+  }
+  if (!clueDims) clueDims = [...ALL_DIMS]; // practically unreachable
 
-  // Coroner Autopsy -> Forensic Analyst (P2)
-  evidenceList.push({
-    id: `ev-autopsy-victim`,
-    title: narrative.autopsyTitle(victimName),
-    type: 'autopsy',
-    assignedRole: 'analyst',
-    summary: `Official forensic examination of the deceased.`,
-    details: narrative.autopsyDetail(victimName, weaponObj.name),
-    isKeyEvidence: false,
-    tag: 'Timeline',
-    iconType: 'stethoscope'
-  });
+  // Ids are random so they never leak the answer.
+  for (const s of suspects) {
+    s.id = rng.id('s');
+    s.age = rng.int(24, 70);
+    s.motiveOptionId = rng.id('m');
+  }
+  const killer = suspects[killerIdx];
 
-  // Innocent Suspect Alibis & Lab Scans
-  innocentSuspects.forEach((innocent, idx) => {
-    evidenceList.push({
-      id: `ev-innocent-${idx}-1`,
-      title: `Statement: Alibi Verification — ${innocent.name}`,
-      type: idx % 2 === 0 ? 'witness_statement' : 'phone_log',
-      assignedRole: 'lead',
-      summary: `Verified alibi — cross-referenced location data.`,
-      details: narrative.innocentAlibiDetail(innocent.name),
-      relatedSuspectId: innocent.id,
-      isKeyEvidence: false,
-      tag: 'Fake Alibi',
-      iconType: 'user-check'
-    });
+  // Interview flavour: one innocent may confirm the habit clue, the killer may frame someone.
+  const innocentIdxs = suspects.map((_, i) => i).filter(i => i !== killerIdx);
+  if (clueDims.includes('habit')) suspects[rng.pick(innocentIdxs)].noticed = 'true';
+  if (cfg.frame) {
+    killer.noticed = 'frame';
+    killer.frameTargetIdx = rng.pick(innocentIdxs);
+  }
 
-    evidenceList.push({
-      id: `ev-innocent-${idx}-2`,
-      title: `Lab Print Scan: ${innocent.name}`,
-      type: 'fingerprint',
-      assignedRole: 'analyst',
-      summary: `Surface swab analysis from the crime scene vicinity.`,
-      details: `Fingerprint ridges belonging to ${innocent.name} were recovered from the door handle. Chemical reagent dating confirms the prints were deposited over 48 hours before the incident during routine access, ruling out presence at time of death.`,
-      relatedSuspectId: innocent.id,
-      isKeyEvidence: false,
-      tag: 'Timeline',
-      iconType: 'fingerprint'
-    });
-  });
+  // Weapons: the real one, a same-cause decoy when possible, then others.
+  const trueWeaponIdx = rng.int(0, th.weapons.length - 1);
+  const trueCause = th.weapons[trueWeaponIdx].cause;
+  const others = rng.shuffle(th.weapons.map((_, i) => i).filter(i => i !== trueWeaponIdx));
+  const sameCause = others.filter(i => th.weapons[i].cause === trueCause);
+  const decoys = [...sameCause.slice(0, 1), ...others.filter(i => !sameCause.slice(0, 1).includes(i))].slice(0, cfg.weapons - 1);
+  const weapons = rng.shuffle([trueWeaponIdx, ...decoys]).map(weaponIdx => ({ weaponIdx, optionId: rng.id('w') }));
 
-  const solutionGraph = {
-    killerId: killer.id,
-    killerName: killer.name,
-    motiveEvidenceId: motiveEvId,
-    weaponEvidenceId: weaponEvId,
-    alibiContradictionEvidenceId: contradictionEvId,
-    explanation: `${killer.name} murdered ${victimName} using ${weaponObj.name}. Motive: ${motiveText}. Their stated alibi at ${narrative.killerFakeAlibiLocation} was disproved by ${narrative.killerCctvTitle}.`
+  // ─── Evidence ───
+  const evidence: BlueprintEvidence[] = [];
+  const ev = (role: Role, kind: EvidenceKind, extra: Partial<BlueprintEvidence> = {}) => {
+    const item = { id: rng.id('ev'), role, kind, ...extra };
+    evidence.push(item);
+    return item;
   };
+
+  ev('lead', 'diary');
+  ev('analyst', 'autopsy');
+  if (clueDims.includes('height')) ev('lead', 'witness');
+  if (clueDims.includes('coat')) ev('lead', 'camera');
+  if (clueDims.includes('hand')) ev('analyst', 'smudge');
+  if (clueDims.includes('footwear')) ev('analyst', 'shoeprint');
+  if (clueDims.includes('habit')) ev('analyst', 'trace');
+  if (clueDims.includes('voice')) ev('lead', 'phone');
+  if (clueDims.includes('blood')) ev('analyst', 'scrapings');
+
+  let alibiEvidenceId = '';
+  const usedPlaces = [...new Set(suspects.map(s => s.placeIdx))];
+  for (const placeIdx of usedPlaces) {
+    const record = ev('lead', 'record', { ref: placeIdx });
+    if (placeIdx === killer.placeIdx) alibiEvidenceId = record.id;
+  }
+
+  const motiveDocSuspects = [killerIdx, ...rng.shuffle(innocentIdxs).slice(0, cfg.extraMotiveDocs)];
+  let motiveRole: Role = rng.next() < 0.5 ? 'lead' : 'analyst';
+  for (const idx of rng.shuffle(motiveDocSuspects)) {
+    ev(motiveRole, 'document', { ref: idx });
+    motiveRole = motiveRole === 'lead' ? 'analyst' : 'lead';
+  }
+
+  const foundPlaces = [...placeIdxs];
+  let weaponRole: Role = rng.next() < 0.5 ? 'lead' : 'analyst';
+  for (const w of weapons) {
+    ev(weaponRole, 'weapon', { ref: w.weaponIdx, foundPlaceIdx: rng.pick(foundPlaces) });
+    weaponRole = weaponRole === 'lead' ? 'analyst' : 'lead';
+  }
+
+  const trueWeaponOption = weapons.find(w => w.weaponIdx === trueWeaponIdx)!;
 
   return {
-    id: caseId,
-    title: `${title} [SEED: ${seedStr}]`,
+    seed: seedStr,
+    theme,
     difficulty,
-    victim: {
-      name: victimName,
-      age: victimAge,
-      occupation: victimOccupation,
-      timeOfDeath: "10:10 PM to 10:30 PM",
-      location: victimLocation
-    },
-    synopsis: narrative.synopsis(victimName, victimOccupation, victimLocation, numSuspects),
+    titleIdx,
+    victimIdx,
+    victimAge,
+    sceneIdx,
+    startMin,
+    witnessIdx,
+    witnessMin,
+    cameraIdx,
+    cameraMin,
+    phoneMin,
     suspects,
-    evidenceList,
-    solutionGraph
+    killerIdx,
+    clueDims,
+    slip: cfg.slip,
+    weapons,
+    trueWeaponIdx,
+    evidence: rng.shuffle(evidence),
+    solution: {
+      killerId: killer.id,
+      motiveId: killer.motiveOptionId,
+      weaponId: trueWeaponOption.optionId,
+      alibiEvidenceId,
+    },
   };
 }
+
+// ─── Localization ────────────────────────────────────────────────────────────
+
+function formatTime(min: number, lang: Lang): string {
+  const h = Math.floor(min / 60) % 24;
+  const m = (min % 60).toString().padStart(2, '0');
+  if (lang === 'es') return `${h}:${m}`;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${m} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function formatWindow(startMin: number, lang: Lang): string {
+  const a = formatTime(startMin, lang);
+  const b = formatTime(startMin + 30, lang);
+  return lang === 'es' ? `las ${a} y las ${b}` : `${a} and ${b}`;
+}
+
+function joinNames(names: string[], lang: Lang): string {
+  if (names.length <= 1) return names.join('');
+  const and = lang === 'es' ? ' y ' : ' and ';
+  return names.slice(0, -1).join(', ') + and + names[names.length - 1];
+}
+
+export function localize(bp: Blueprint, lang: Lang): PublicMystery {
+  const th = THEMES[bp.theme];
+  const victim = th.victims[bp.victimIdx];
+  const scene = th.scenes[bp.sceneIdx];
+  const killer = bp.suspects[bp.killerIdx];
+  const window = formatWindow(bp.startMin, lang);
+  const trueWeapon = th.weapons[bp.trueWeaponIdx];
+  const nameOf = (s: BlueprintSuspect) => th.suspects[s.seedIdx].name;
+  const L = (text: T) => text[lang];
+
+  const base = { victim: victim.name, scene: scene.name, window };
+
+  const suspects: PublicSuspect[] = bp.suspects.map(s => {
+    const seed = th.suspects[s.seedIdx];
+    const place = th.alibiPlaces[s.placeIdx];
+    const motive = MOTIVES[s.motiveIdx];
+    const isKiller = s === killer;
+
+    let noticed = fill(TEXT.aNoticedNothing, lang);
+    if (s.noticed === 'true') {
+      noticed = fill(TEXT.aNoticedTrue, lang, { ...base, value: TRAITS.habit[killer.traits.habit].clue });
+    } else if (s.noticed === 'frame' && s.frameTargetIdx !== undefined) {
+      noticed = fill(TEXT.aNoticedFrame, lang, { ...base, other: nameOf(bp.suspects[s.frameTargetIdx]) });
+    }
+
+    const traits = {} as Record<TraitDim, string>;
+    const traitKeys = {} as Record<TraitDim, string>;
+    for (const dim of ALL_DIMS) {
+      const v = TRAITS[dim][s.traits[dim]];
+      traits[dim] = L(v.label);
+      traitKeys[dim] = v.key;
+    }
+
+    return {
+      id: s.id,
+      name: seed.name,
+      role: L(seed.role),
+      age: s.age,
+      color: s.color,
+      bio: fill(TEXT.bio, lang, { role: seed.role, line: fill(th.bioLines[s.bioIdx], lang, base) }),
+      alibiPlace: L(place.label),
+      alibiStatement: fill(TEXT.alibiStatement, lang, { ...base, place: place.name }),
+      traits,
+      traitKeys,
+      interview: [
+        { q: fill(TEXT.qWhere, lang, base), a: fill(TEXT.aWhere, lang, { ...base, place: place.name }) },
+        { q: fill(TEXT.qRelation, lang, base), a: fill(motive.deflect, lang, base) },
+        {
+          q: fill(TEXT.qHeard, lang, base),
+          a: isKiller && bp.slip
+            ? fill(TEXT.aHeardSlip, lang, { ...base, cause: CAUSES[trueWeapon.cause].slipNoun })
+            : fill(TEXT.aHeardInnocent, lang, base),
+        },
+        { q: fill(TEXT.qNoticed, lang, base), a: noticed },
+      ],
+    };
+  });
+
+  const evidence: PublicEvidence[] = bp.evidence.map(e => {
+    const out = (title: string, summary: string, details: string): PublicEvidence => ({
+      id: e.id, role: e.role, kind: e.kind, title, summary, details,
+    });
+
+    switch (e.kind) {
+      case 'diary':
+        return out(
+          fill(TEXT.diaryTitle, lang, base),
+          fill(TEXT.diarySummary, lang, base),
+          fill(TEXT.diaryDetails, lang, { ...base, start: formatTime(bp.startMin, lang) })
+        );
+      case 'autopsy': {
+        const cause = fill(CAUSES[trueWeapon.cause].autopsy, lang, { trace: trueWeapon.trace });
+        return out(
+          fill(TEXT.autopsyTitle, lang, base),
+          fill(TEXT.autopsySummary, lang, base),
+          fill(TEXT.autopsyDetails, lang, { ...base, cause })
+        );
+      }
+      case 'witness': {
+        const w = th.witnesses[bp.witnessIdx];
+        const params = { ...base, witness: w.name, value: TRAITS.height[killer.traits.height].clue, time: formatTime(bp.witnessMin, lang) };
+        return out(fill(TEXT.witnessTitle, lang, { witness: w.label }), fill(TEXT.witnessSummary, lang, params), fill(TEXT.witnessDetails, lang, params));
+      }
+      case 'camera': {
+        const source = th.cameras[bp.cameraIdx];
+        const params = { ...base, source, value: TRAITS.coat[killer.traits.coat].clue, time: formatTime(bp.cameraMin, lang) };
+        return out(L(source), fill(TEXT.cameraSummary, lang, params), fill(TEXT.cameraDetails, lang, params));
+      }
+      case 'smudge': {
+        const params = { ...base, value: TRAITS.hand[killer.traits.hand].clue };
+        return out(fill(TEXT.smudgeTitle, lang), fill(TEXT.smudgeSummary, lang), fill(TEXT.smudgeDetails, lang, params));
+      }
+      case 'shoeprint': {
+        const params = { ...base, floor: th.floor, value: TRAITS.footwear[killer.traits.footwear].clue };
+        return out(fill(TEXT.shoeprintTitle, lang), fill(TEXT.shoeprintSummary, lang), fill(TEXT.shoeprintDetails, lang, params));
+      }
+      case 'phone': {
+        const params = { ...base, source: th.phone, value: TRAITS.voice[killer.traits.voice].clue, time: formatTime(bp.phoneMin, lang) };
+        return out(L(th.phone), fill(TEXT.phoneSummary, lang, params), fill(TEXT.phoneDetails, lang, params));
+      }
+      case 'scrapings': {
+        const params = { ...base, value: TRAITS.blood[killer.traits.blood].clue };
+        return out(fill(TEXT.scrapingsTitle, lang), fill(TEXT.scrapingsSummary, lang), fill(TEXT.scrapingsDetails, lang, params));
+      }
+      case 'trace': {
+        const params = { ...base, value: TRAITS.habit[killer.traits.habit].clue };
+        return out(fill(TEXT.traceTitle, lang), fill(TEXT.traceSummary, lang), fill(TEXT.traceDetails, lang, params));
+      }
+      case 'record': {
+        const place = th.alibiPlaces[e.ref!];
+        const confirmed = bp.suspects.filter(s => s.verified && s.placeIdx === e.ref).map(nameOf);
+        const params = { ...base, place: place.name, names: joinNames(confirmed, lang) };
+        return out(
+          fill(TEXT.recordTitle, lang, { place: place.label }),
+          fill(TEXT.recordSummary, lang, params),
+          fill(confirmed.length ? TEXT.recordWithNames : TEXT.recordEmpty, lang, params)
+        );
+      }
+      case 'document': {
+        const s = bp.suspects[e.ref!];
+        const motive = MOTIVES[s.motiveIdx];
+        const params = { ...base, name: nameOf(s) };
+        return out(fill(motive.docTitle, lang, params), fill(motive.docSummary, lang, params), fill(motive.doc, lang, params));
+      }
+      case 'weapon': {
+        const w = th.weapons[e.ref!];
+        const params = { ...base, weapon: w.label, place: th.alibiPlaces[e.foundPlaceIdx!].name, desc: w.desc };
+        return out(fill(TEXT.weaponTitle, lang, params), fill(TEXT.weaponSummary, lang, params), fill(TEXT.weaponDetails, lang, params));
+      }
+    }
+  });
+
+  const motiveOptions = bp.suspects
+    .map(s => ({ id: s.motiveOptionId, label: L(MOTIVES[s.motiveIdx].label) }))
+    .sort((a, b) => a.label.localeCompare(b.label, lang));
+  const weaponOptions = bp.weapons.map(w => ({ id: w.optionId, label: L(th.weapons[w.weaponIdx].label) }));
+
+  return {
+    caseId: `case-${bp.seed}`,
+    seed: bp.seed,
+    theme: bp.theme,
+    difficulty: bp.difficulty,
+    lang,
+    title: L(th.titles[bp.titleIdx]),
+    victim: {
+      name: victim.name,
+      age: bp.victimAge,
+      occupation: L(victim.occupation),
+      scene: L(scene.label),
+      timeWindow: `${formatTime(bp.startMin, lang)} – ${formatTime(bp.startMin + 30, lang)}`,
+    },
+    synopsis: fill(th.synopsis, lang, { ...base, occupation: victim.occupation, count: String(bp.suspects.length) }),
+    suspects,
+    evidence,
+    options: { motives: motiveOptions, weapons: weaponOptions },
+  };
+}
+
+const CLUE_KIND: Record<TraitDim, EvidenceKind> = {
+  height: 'witness',
+  coat: 'camera',
+  voice: 'phone',
+  hand: 'smudge',
+  footwear: 'shoeprint',
+  habit: 'trace',
+  blood: 'scrapings',
+};
+
+/** Four hints, each narrowing things further, none naming the killer outright. */
+export function hintsFor(bp: Blueprint, lang: Lang): string[] {
+  const th = THEMES[bp.theme];
+  const m = localize(bp, lang);
+  const killer = bp.suspects[bp.killerIdx];
+  const nameOf = (s: BlueprintSuspect) => th.suspects[s.seedIdx].name;
+  const hints: string[] = [];
+
+  const verified = bp.suspects.filter(s => s.verified);
+  hints.push(verified.length
+    ? fill(TEXT.hintAlibi, lang, { names: joinNames(verified.map(nameOf), lang) })
+    : fill(TEXT.hintAlibiNone, lang));
+
+  const decoys = bp.weapons.filter(w => w.weaponIdx !== bp.trueWeaponIdx).map(w => th.weapons[w.weaponIdx].name[lang]);
+  const or = lang === 'es' ? ' ni ' : ' or ';
+  hints.push(fill(TEXT.hintWeapon, lang, { names: decoys.length > 1 ? decoys.slice(0, -1).join(', ') + or + decoys[decoys.length - 1] : decoys.join('') }));
+
+  // Then the physical clues, strongest first, each against who is still in play.
+  let remaining = bp.suspects.filter(s => !s.verified);
+  const dims = [...bp.clueDims];
+  while (hints.length < 4 && dims.length) {
+    dims.sort((a, b) =>
+      remaining.filter(s => s.traits[b] !== killer.traits[b]).length - remaining.filter(s => s.traits[a] !== killer.traits[a]).length);
+    const dim = dims.shift()!;
+    const out = remaining.filter(s => s.traits[dim] !== killer.traits[dim]);
+    if (!out.length) continue;
+    const card = m.evidence.find(e => e.kind === CLUE_KIND[dim]);
+    hints.push(fill(TEXT.hintClue, lang, { title: card?.title ?? '', names: joinNames(out.map(nameOf), lang) }));
+    remaining = remaining.filter(s => s.traits[dim] === killer.traits[dim]);
+  }
+  if (hints.length < 4) hints.push(fill(bp.slip ? TEXT.hintSlip : TEXT.hintMotive, lang));
+  return hints.slice(0, 4);
+}
+
+/** Everyone gets the same case on the same day. */
+export function dailyCase(date: string): { seed: string; theme: ThemeKey; difficulty: Difficulty } {
+  let h = 0;
+  for (const ch of date) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return { seed: `DAILY-${date}`, theme: THEME_KEYS[h % THEME_KEYS.length], difficulty: 'Detective' };
+}
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+
+export function explainSolution(bp: Blueprint, lang: Lang): string {
+  const th = THEMES[bp.theme];
+  const killer = bp.suspects[bp.killerIdx];
+  return fill(TEXT.explanation, lang, {
+    killer: th.suspects[killer.seedIdx].name,
+    victim: th.victims[bp.victimIdx].name,
+    weapon: th.weapons[bp.trueWeaponIdx].name,
+    motive: lowerFirst(MOTIVES[killer.motiveIdx].label[lang]),
+    place: th.alibiPlaces[killer.placeIdx].name,
+  });
+}
+
+export function randomSeed(): string {
+  const words = ['RAVEN', 'ASH', 'MOTH', 'IVORY', 'EMBER', 'FOG', 'VELVET', 'COBALT', 'THORN', 'SILK', 'MARIGOLD', 'NEON'];
+  return `${words[Math.floor(Math.random() * words.length)]}-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+export { THEME_KEYS };

@@ -1,835 +1,665 @@
-import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Group, Rect, Text, Line, Circle, Path } from 'react-konva';
 import Konva from 'konva';
-import { BoardCard, BoardString, Role } from '../types';
+import { StickyNote, ZoomIn, ZoomOut, Maximize, Search, Spline, Trash2, X, Link2 } from 'lucide-react';
+import { BoardCard, BoardStyle, CardKind, Mystery, Player, Role, Room, StatusTag, StringLabel } from '../types';
+import { useI18n, TKey } from '../i18n';
+import { CARD_SIZE, QUESTION_IDS, QUESTION_SIZE, QuestionId, pinPoint, questionPos } from '../boardLayout';
+import { ROLE_COLORS, STRING_COLORS, initials } from '../cardInfo';
 import { StringTagModal } from './StringTagModal';
-import { StickyNote, Tag, ZoomIn, ZoomOut, Maximize2, Grid } from 'lucide-react';
+import { DRAG_MIME } from './FilesPanel';
+import { inviteLink } from '../App';
 
 export interface CorkboardCanvasRef {
   exportSnapshot: () => void;
+  getViewCenter: () => { x: number; y: number };
+  fitToContent: () => void;
 }
 
-interface CorkboardCanvasProps {
-  cards: Record<string, BoardCard>;
-  strings: Record<string, BoardString>;
-  partnerCursor?: { socketId: string; x: number; y: number; name?: string };
-  myRole: Role;
-  canvasTheme?: 'corkboard' | 'blackboard' | 'blueprint' | 'mindplace';
-  onCardMove: (cardId: string, x: number, y: number) => void;
-  onCardStatusTag?: (cardId: string, statusTag: BoardCard['statusTag']) => void;
-  onCreateString: (fromCardId: string, toCardId: string, label?: BoardString['label'], color?: string) => void;
+interface Props {
+  room: Room;
+  mystery: Mystery;
+  me: Player;
+  partner?: Player;
+  solo: boolean;
+  boardStyle: BoardStyle;
+  partnerCursor: { x: number; y: number; name: string; role: Role } | null;
+  onMoveCard: (cardId: string, x: number, y: number, final: boolean) => void;
+  onDropFile: (kind: CardKind, refId: string, at: { x: number; y: number }) => void;
+  onAddNote: (text: string) => void;
+  onTag: (cardId: string, tag: StatusTag | null) => void;
+  onRemove: (cardId: string) => void;
+  onCreateString: (from: string, to: string, label: StringLabel) => void;
   onDeleteString: (stringId: string) => void;
-  onSelectCardDetails: (card: BoardCard) => void;
-  onSendCursor: (x: number, y: number) => void;
-  onAddStickyNote: (text: string) => void;
-  onAutoTidyBoard?: () => void;
+  onInspect: (card: BoardCard) => void;
+  onCursor: (x: number, y: number) => void;
+  onCopied: () => void;
 }
 
-export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, CorkboardCanvasProps>(({
-  cards,
-  strings,
-  partnerCursor,
-  myRole,
-  canvasTheme = 'mindplace',
-  onCardMove,
-  onCardStatusTag,
-  onCreateString,
-  onDeleteString,
-  onSelectCardDetails,
-  onSendCursor,
-  onAddStickyNote,
-  onAutoTidyBoard
-}, ref) => {
+const FONT_TYPE = 'Special Elite';
+const FONT_TYPED = 'Courier Prime';
+const FONT_HAND = 'Permanent Marker';
+const PAPER = { lead: '#efe3c6', analyst: '#e9eff0' };
+const TAG_STYLE: Record<StatusTag, { color: string }> = {
+  prime_suspect: { color: '#b3261e' },
+  cleared: { color: '#2e7d4f' },
+  key_clue: { color: '#a8741a' },
+};
+
+export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref) => {
+  const {
+    room, mystery, me, partner, solo, boardStyle, partnerCursor, onMoveCard, onDropFile, onAddNote, onTag, onRemove,
+    onCreateString, onDeleteString, onInspect, onCursor, onCopied,
+  } = props;
+  const { t } = useI18n();
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
-  const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight - 64 });
-  const [stageScale, setStageScale] = useState(1);
-  const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+  const groupRefs = useRef<Record<string, Konva.Group | null>>({});
+  const knownIds = useRef<Set<string> | null>(null);
+  const lastCursorSent = useRef(0);
 
-  const [selectedPinCardId, setSelectedPinCardId] = useState<string | null>(null);
-  const [pendingStringPair, setPendingStringPair] = useState<{ from: string; to: string } | null>(null);
-  const [liveCursorPos, setLiveCursorPos] = useState<{ x: number; y: number } | null>(null);
-  const [hoveredStringId, setHoveredStringId] = useState<string | null>(null);
-  const [hoveredPinCardId, setHoveredPinCardId] = useState<string | null>(null);
-  const [activeMenuCardId, setActiveMenuCardId] = useState<string | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [scale, setScale] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [connectFrom, setConnectFrom] = useState<string | null>(null);
+  const [pendingString, setPendingString] = useState<{ from: string; to: string } | null>(null);
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+  const [hoverString, setHoverString] = useState<string | null>(null);
+  const [hoverCard, setHoverCard] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<string | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [fontsReady, setFontsReady] = useState(0);
 
-  // Alan Wake 2 Mind Place Central Case Question Header Nodes
-  const CASE_QUESTIONS: Record<string, BoardCard> = {
-    'q-killer': {
-      id: 'q-killer',
-      evidenceId: 'q-killer',
-      title: 'WHO IS THE KILLER?',
-      type: 'witness_statement',
-      role: 'lead',
-      x: 80,
-      y: 30,
-      rotation: 0,
-      placedBy: 'MindPlace',
-      placedAt: 0,
-      details: 'Connect prime suspect cards to expose the perpetrator.'
-    },
-    'q-motive': {
-      id: 'q-motive',
-      evidenceId: 'q-motive',
-      title: 'WHAT WAS THE MOTIVE?',
-      type: 'witness_statement',
-      role: 'lead',
-      x: 320,
-      y: 30,
-      rotation: 0,
-      placedBy: 'MindPlace',
-      placedAt: 0,
-      details: 'Connect financial ledgers or blackmail evidence.'
-    },
-    'q-weapon': {
-      id: 'q-weapon',
-      evidenceId: 'q-weapon',
-      title: 'WHERE IS THE MURDER WEAPON?',
-      type: 'autopsy',
-      role: 'analyst',
-      x: 560,
-      y: 30,
-      rotation: 0,
-      placedBy: 'MindPlace',
-      placedAt: 0,
-      details: 'Connect toxicology or lab specimen scans.'
-    },
-    'q-alibi': {
-      id: 'q-alibi',
-      evidenceId: 'q-alibi',
-      title: 'WHAT DISPROVES THE ALIBI?',
-      type: 'cctv_report',
-      role: 'lead',
-      x: 800,
-      y: 30,
-      rotation: 0,
-      placedBy: 'MindPlace',
-      placedAt: 0,
-      details: 'Connect CCTV or telecom contradiction records.'
-    }
-  };
+  const cards = room.cards;
+  const cardList = useMemo(() => Object.values(cards), [cards]);
 
-  const allCards = { ...CASE_QUESTIONS, ...cards };
+  // Redraw once the web fonts are in, otherwise Konva measures with fallbacks.
+  useEffect(() => {
+    document.fonts?.ready.then(() => {
+      setFontsReady(n => n + 1);
+      stageRef.current?.batchDraw();
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
+  // ─── View helpers ───
+  const toCanvas = useCallback((sx: number, sy: number) => ({ x: (sx - pos.x) / scale, y: (sy - pos.y) / scale }), [pos, scale]);
+
+  const fitToContent = useCallback(() => {
+    const boxes = [
+      ...cardList.map(c => ({ x: c.x, y: c.y, w: CARD_SIZE[c.kind].w, h: CARD_SIZE[c.kind].h })),
+      ...QUESTION_IDS.map(q => ({ ...questionPos(q), w: QUESTION_SIZE.w, h: QUESTION_SIZE.h })),
+    ];
+    const minX = Math.min(...boxes.map(b => b.x)) - 40;
+    const minY = Math.min(...boxes.map(b => b.y)) - 40;
+    const maxX = Math.max(...boxes.map(b => b.x + b.w)) + 40;
+    const maxY = Math.max(...boxes.map(b => b.y + b.h)) + 90;
+    const s = Math.max(0.35, Math.min(1.15, Math.min(size.w / (maxX - minX), size.h / (maxY - minY))));
+    setScale(s);
+    setPos({ x: (size.w - (maxX - minX) * s) / 2 - minX * s, y: (size.h - (maxY - minY) * s) / 2 - minY * s });
+  }, [cardList, size]);
 
   useImperativeHandle(ref, () => ({
     exportSnapshot: () => {
-      if (!stageRef.current) return;
-      const dataUrl = stageRef.current.toDataURL({ pixelRatio: 2 });
+      const stage = stageRef.current;
+      if (!stage) return;
       const link = document.createElement('a');
-      link.download = `mindplace-caseboard-${Date.now()}.png`;
-      link.href = dataUrl;
-      document.body.appendChild(link);
+      link.download = `case-${room.roomCode}.png`;
+      link.href = stage.toDataURL({ pixelRatio: 2 });
       link.click();
-      document.body.removeChild(link);
-    }
+    },
+    getViewCenter: () => toCanvas(size.w / 2, size.h / 2),
+    fitToContent,
   }));
 
+  // Fit once on first layout.
+  const didFit = useRef(false);
   useEffect(() => {
-    const handleResize = () => {
-      setDimensions({ width: window.innerWidth, height: window.innerHeight - 64 });
+    if (!didFit.current && size.w > 100) {
+      didFit.current = true;
+      fitToContent();
+    }
+  }, [size, fitToContent]);
+
+  // Pin-drop animation for cards that appear after the first render.
+  useEffect(() => {
+    if (!knownIds.current) {
+      knownIds.current = new Set(Object.keys(cards));
+      return;
+    }
+    for (const id of Object.keys(cards)) {
+      if (knownIds.current.has(id)) continue;
+      knownIds.current.add(id);
+      const node = groupRefs.current[id];
+      if (!node) continue;
+      node.scale({ x: 1.18, y: 1.18 });
+      node.opacity(0);
+      new Konva.Tween({ node, duration: 0.35, scaleX: 1, scaleY: 1, opacity: 1, easing: Konva.Easings.BackEaseOut }).play();
+    }
+  }, [cards]);
+
+  // Escape cancels string mode and selection.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setConnectFrom(null);
+        setSelectedId(null);
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && !(e.target as HTMLElement)?.closest('input,textarea')) {
+        onRemove(selectedId);
+        setSelectedId(null);
+      }
     };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId, onRemove]);
 
-  const handleZoomIn = () => {
-    setStageScale((prev) => Math.min(2.5, prev * 1.15));
-  };
-
-  const handleZoomOut = () => {
-    setStageScale((prev) => Math.max(0.4, prev / 1.15));
-  };
-
-  const handleResetZoom = () => {
-    setStageScale(1);
-    setStagePos({ x: 0, y: 0 });
+  const zoomBy = (factor: number, center?: { x: number; y: number }) => {
+    const c = center ?? { x: size.w / 2, y: size.h / 2 };
+    const next = Math.max(0.3, Math.min(2.2, scale * factor));
+    const world = toCanvas(c.x, c.y);
+    setScale(next);
+    setPos({ x: c.x - world.x * next, y: c.y - world.y * next });
   };
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
-    const scaleBy = 1.05;
-    const stage = stageRef.current;
-    if (!stage) return;
-
-    const oldScale = stage.scaleX();
-    const pointer = stage.getPointerPosition();
-    if (!pointer) return;
-
-    const mousePointTo = {
-      x: (pointer.x - stage.x()) / oldScale,
-      y: (pointer.y - stage.y()) / oldScale,
-    };
-
-    const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-    const clampedScale = Math.max(0.4, Math.min(2.5, newScale));
-
-    setStageScale(clampedScale);
-    setStagePos({
-      x: pointer.x - mousePointTo.x * clampedScale,
-      y: pointer.y - mousePointTo.y * clampedScale,
-    });
-  };
-
-  const handleMouseMove = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    const stage = stageRef.current;
-    if (!stage) return;
-
-    const pointer = stage.getPointerPosition();
-    if (pointer) {
-      const canvasX = (pointer.x - stagePos.x) / stageScale;
-      const canvasY = (pointer.y - stagePos.y) / stageScale;
-      setLiveCursorPos({ x: canvasX, y: canvasY });
-      onSendCursor(canvasX, canvasY);
-    }
-  };
-
-  const handlePinClick = (cardId: string, e: Konva.KonvaEventObject<MouseEvent>) => {
-    e.cancelBubble = true;
-
-    if (!selectedPinCardId) {
-      setSelectedPinCardId(cardId);
-    } else if (selectedPinCardId === cardId) {
-      setSelectedPinCardId(null);
+    const p = stageRef.current?.getPointerPosition();
+    if (!p) return;
+    if (e.evt.ctrlKey || e.evt.metaKey || Math.abs(e.evt.deltaY) > Math.abs(e.evt.deltaX) * 2) {
+      zoomBy(e.evt.deltaY < 0 ? 1.08 : 1 / 1.08, p);
     } else {
-      setPendingStringPair({ from: selectedPinCardId, to: cardId });
-      setSelectedPinCardId(null);
+      setPos(prev => ({ x: prev.x - e.evt.deltaX, y: prev.y - e.evt.deltaY }));
     }
   };
 
-  const getPinCoords = (card: BoardCard) => {
-    const cardWidth = 210;
-    return {
-      x: card.x + cardWidth / 2,
-      y: card.y + 12
-    };
-  };
-
-  const activeStartCard = selectedPinCardId ? allCards[selectedPinCardId] : null;
-  const startPinCoords = activeStartCard ? getPinCoords(activeStartCard) : null;
-
-  const activeHoveredString = hoveredStringId ? strings[hoveredStringId] : null;
-  const highlightedCardIds = activeHoveredString
-    ? [activeHoveredString.fromCardId, activeHoveredString.toCardId]
-    : [];
-
-  const bgClass =
-    canvasTheme === 'blueprint'
-      ? 'blueprint-bg'
-      : canvasTheme === 'blackboard'
-      ? 'blackboard-bg'
-      : canvasTheme === 'corkboard'
-      ? 'corkboard-bg'
-      : 'mindplace-bg';
-
-  const handlePromptSticky = () => {
-    const text = prompt("Enter Case Note:", "Is the witness statement verified?");
-    if (text && text.trim()) {
-      onAddStickyNote(text.trim());
+  const handleMouseMove = () => {
+    const p = stageRef.current?.getPointerPosition();
+    if (!p) return;
+    const world = toCanvas(p.x, p.y);
+    if (connectFrom) setPointer(world);
+    const now = performance.now();
+    if (now - lastCursorSent.current > 60) {
+      lastCursorSent.current = now;
+      onCursor(world.x, world.y);
     }
   };
 
-  // Render Procedural Noir Illustration Vector Art inside Polaroid
-  const renderNoirArtwork = (card: BoardCard) => {
-    const photoWidth = 182;
-    const photoHeight = 140;
-    const isSuspect = card.title.toLowerCase().includes('suspect') || card.title.toLowerCase().includes('statement') || card.title.toLowerCase().includes('alibi') || card.title.toLowerCase().includes('dr.') || card.title.toLowerCase().includes('julian') || card.title.toLowerCase().includes('clara') || card.title.toLowerCase().includes('marcus') || card.title.toLowerCase().includes('genevieve') || card.title.toLowerCase().includes('garrison');
-
-    if (isSuspect) {
-      // Noir Character Silhouette Art
-      return (
-        <Group x={14} y={28}>
-          {/* Photo Background */}
-          <Rect width={photoWidth} height={photoHeight} fill="#1a2332" />
-          
-          {/* Character Head & Shoulders Silhouette */}
-          <Circle x={91} y={55} radius={28} fill="#0d131d" />
-          <Path
-            data="M45 130 C 45 90, 137 90, 137 130 Z"
-            fill="#0d131d"
-          />
-
-          {/* Character Accessory / Glasses / Collar / Fedor */}
-          {card.title.includes('Reed') || card.title.includes('Doctor') ? (
-            // Doctor Spectacles & Stethoscope
-            <Group>
-              <Circle x={78} y={52} radius={7} stroke="#e5a93c" strokeWidth={2} />
-              <Circle x={104} y={52} radius={7} stroke="#e5a93c" strokeWidth={2} />
-              <Line points={[85, 52, 97, 52]} stroke="#e5a93c" strokeWidth={2} />
-            </Group>
-          ) : card.title.includes('Thorne') || card.title.includes('Nephew') ? (
-            // Trenchcoat Collar
-            <Path data="M 70 85 L 91 110 L 112 85" stroke="#e5a93c" strokeWidth={2} />
-          ) : (
-            // Classic Noir Badge Silhouette
-            <Circle x={91} y={55} radius={6} fill="#e5a93c" opacity={0.6} />
-          )}
-
-          {/* Photo Film Grain Tint */}
-          <Rect width={photoWidth} height={photoHeight} fill="rgba(229, 169, 60, 0.05)" />
-        </Group>
-      );
-    } else {
-      // Evidence Artifact Graphic Art (Poison, Dagger, CCTV, Print)
-      const isToxic = card.type === 'toxicology' || card.title.toLowerCase().includes('poison') || card.title.toLowerCase().includes('decanter');
-      const isWeapon = card.type === 'autopsy' || card.title.toLowerCase().includes('weapon') || card.title.toLowerCase().includes('dagger');
-      const isCctv = card.type === 'cctv_report' || card.title.toLowerCase().includes('cctv') || card.title.toLowerCase().includes('video');
-
-      return (
-        <Group x={14} y={28}>
-          <Rect width={photoWidth} height={photoHeight} fill="#111823" />
-
-          {isToxic ? (
-            // Chemical Flask Artifact
-            <Group x={66} y={30}>
-              <Path data="M 25 10 L 35 10 L 35 30 L 50 75 L 10 75 L 25 30 Z" fill="#2d3748" stroke="#e5a93c" strokeWidth={2} />
-              <Circle x={30} y={58} radius={12} fill="#e74c3c" opacity={0.8} />
-            </Group>
-          ) : isWeapon ? (
-            // Stiletto Dagger Artifact
-            <Group x={55} y={25}>
-              <Path data="M 40 10 L 45 70 L 35 70 Z" fill="#e5a93c" />
-              <Rect x={30} y={70} width={20} height={6} fill="#c0392b" />
-              <Rect x={37} y={76} width={6} height={20} fill="#1a202c" />
-            </Group>
-          ) : isCctv ? (
-            // CCTV Lens Artifact
-            <Group x={60} y={35}>
-              <Rect x={10} y={20} width={50} height={35} fill="#2d3748" stroke="#e5a93c" strokeWidth={2} cornerRadius={4} />
-              <Circle x={35} y={37} radius={12} fill="#1a202c" stroke="#e74c3c" strokeWidth={2} />
-              <Circle x={52} y={26} radius={3} fill="#e74c3c" />
-            </Group>
-          ) : (
-            // Fingerprint Scan Artifact
-            <Group x={60} y={30}>
-              <Circle x={35} y={40} radius={30} stroke="#e5a93c" strokeWidth={1.5} dash={[6, 3]} />
-              <Circle x={35} y={40} radius={20} stroke="#e5a93c" strokeWidth={1.5} />
-              <Circle x={35} y={40} radius={10} stroke="#e5a93c" strokeWidth={1.5} />
-            </Group>
-          )}
-
-          <Rect width={photoWidth} height={photoHeight} fill="rgba(0,0,0,0.1)" />
-        </Group>
-      );
+  const handleCardClick = (id: string) => {
+    if (connectFrom) {
+      if (connectFrom !== id) setPendingString({ from: connectFrom, to: id });
+      setConnectFrom(null);
+      return;
     }
+    setSelectedId(prev => (prev === id ? null : id));
   };
 
+  const startConnect = (id: string) => {
+    setSelectedId(null);
+    setConnectFrom(id);
+    const start = pinPoint(cards[id], id);
+    setPointer(start);
+  };
+
+  // ─── Drop from the files panel ───
+  const onDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(DRAG_MIME)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setDropActive(true);
+    }
+  };
+  const onDrop = (e: React.DragEvent) => {
+    setDropActive(false);
+    const raw = e.dataTransfer.getData(DRAG_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    const rect = containerRef.current!.getBoundingClientRect();
+    const world = toCanvas(e.clientX - rect.left, e.clientY - rect.top);
+    const { kind, refId } = JSON.parse(raw) as { kind: CardKind; refId: string };
+    onDropFile(kind, refId, world);
+  };
+
+  // ─── Lookups ───
+  const evidenceById = useMemo(() => new Map(mystery.evidence.map(e => [e.id, e])), [mystery]);
+  const suspectById = useMemo(() => new Map(mystery.suspects.map(s => [s.id, s])), [mystery]);
+  const questionLabel: Record<QuestionId, string> = {
+    'q-killer': t('board.q.killer'),
+    'q-motive': t('board.q.motive'),
+    'q-weapon': t('board.q.weapon'),
+    'q-alibi': t('board.q.alibi'),
+  };
+
+  const highlighted = new Set<string>();
+  if (hoverString && room.strings[hoverString]) {
+    highlighted.add(room.strings[hoverString].fromCardId);
+    highlighted.add(room.strings[hoverString].toCardId);
+  }
+
+  const selectedCard = selectedId ? cards[selectedId] : null;
+  const toolbarPos = selectedCard
+    ? { x: (selectedCard.x + CARD_SIZE[selectedCard.kind].w / 2) * scale + pos.x, y: selectedCard.y * scale + pos.y - 12 }
+    : null;
+
+  const bgClass = `${boardStyle}-bg`;
+  const evidenceOnBoard = cardList.some(c => c.kind === 'evidence');
+
+  // ─── Card renderers ───
+  const renderSuspect = (card: BoardCard) => {
+    const s = suspectById.get(card.refId);
+    if (!s) return null;
+    const { w, h } = CARD_SIZE.suspect;
+    return (
+      <>
+        <Rect width={w} height={h} fill="#f7f3ea" cornerRadius={2} shadowColor="black" shadowBlur={16} shadowOpacity={0.6} shadowOffsetY={8} />
+        <Rect x={12} y={12} width={w - 24} height={146} fill="#1c2129" />
+        <Rect x={12} y={12} width={w - 24} height={146} fillRadialGradientStartPoint={{ x: (w - 24) / 2, y: 50 }} fillRadialGradientEndPoint={{ x: (w - 24) / 2, y: 50 }} fillRadialGradientStartRadius={0} fillRadialGradientEndRadius={110} fillRadialGradientColorStops={[0, `${s.color}66`, 1, 'rgba(0,0,0,0)']} />
+        <Circle x={w / 2} y={72} radius={27} fill="#0f1217" />
+        <Path x={w / 2 - 52} y={100} data="M0 58 C 4 22, 30 8, 52 8 C 74 8, 100 22, 104 58 Z" fill="#0f1217" />
+        <Text x={12} y={60} width={w - 24} align="center" text={initials(s.name)} fontFamily={FONT_TYPE} fontSize={20} fill={s.color} opacity={0.9} />
+        <Text x={14} y={166} width={w - 28} text={s.name} fontFamily={FONT_HAND} fontSize={13.5} fill="#1d2a3a" wrap="word" ellipsis height={36} lineHeight={1.15} />
+        <Text x={14} y={206} width={w - 28} text={s.role} fontFamily={FONT_TYPED} fontSize={11} fill="#5b4631" ellipsis wrap="none" />
+      </>
+    );
+  };
+
+  const renderEvidence = (card: BoardCard) => {
+    const ev = evidenceById.get(card.refId);
+    if (!ev) return null;
+    const { w, h } = CARD_SIZE.evidence;
+    const roleColor = ROLE_COLORS[ev.role];
+    return (
+      <>
+        <Rect width={w} height={h} fill={PAPER[ev.role]} cornerRadius={2} shadowColor="black" shadowBlur={14} shadowOpacity={0.55} shadowOffsetY={7} />
+        <Rect x={0} y={0} width={w} height={4} fill={roleColor} />
+        <Text x={12} y={14} text={t(`kind.${ev.kind}` as TKey).toUpperCase()} fontFamily={FONT_TYPE} fontSize={10.5} letterSpacing={1.2} fill="#8a6a3d" />
+        <Text x={w - 60} y={14} width={48} align="right" text={ev.role === 'lead' ? t('board.foundBy') : t('board.foundByAnalyst')} fontFamily={FONT_TYPED} fontSize={10} fill={ev.role === 'lead' ? '#9c6b12' : '#2a7896'} fontStyle="bold" />
+        <Text x={12} y={32} width={w - 24} text={ev.title} fontFamily={FONT_TYPE} fontSize={13.5} lineHeight={1.15} fill="#21160c" wrap="word" ellipsis height={48} />
+        <Line points={[12, 84, w - 12, 84]} stroke="#c9b48c" strokeWidth={0.75} dash={[3, 3]} />
+        <Text x={12} y={92} width={w - 24} text={ev.summary} fontFamily={FONT_TYPED} fontSize={11.5} lineHeight={1.2} fill="#4a3826" wrap="word" ellipsis height={44} />
+      </>
+    );
+  };
+
+  const renderNote = (card: BoardCard) => {
+    const { w, h } = CARD_SIZE.note;
+    return (
+      <>
+        <Rect width={w} height={h} fill="#f6d55c" shadowColor="black" shadowBlur={10} shadowOpacity={0.5} shadowOffsetY={6} />
+        <Rect width={w} height={20} fill="#ecc94b" />
+        <Text x={10} y={26} width={w - 20} height={h - 32} text={card.text || ''} fontFamily={FONT_HAND} fontSize={14} lineHeight={1.15} fill="#3a2c0a" wrap="word" ellipsis />
+      </>
+    );
+  };
+
+  const renderTag = (card: BoardCard) => {
+    if (!card.statusTag) return null;
+    const { w } = CARD_SIZE[card.kind];
+    const style = TAG_STYLE[card.statusTag];
+    const label = t(`board.tag.${card.statusTag}` as TKey).toUpperCase();
+    return (
+      <Group x={w / 2} y={card.kind === 'suspect' ? 92 : 70} rotation={-12} listening={false}>
+        <Rect x={-80} y={-15} width={160} height={30} stroke={style.color} strokeWidth={2.5} cornerRadius={4} fill="rgba(255,255,255,0.12)" />
+        <Text x={-80} y={-8} width={160} align="center" text={label} fontFamily={FONT_TYPE} fontSize={14} letterSpacing={1.5} fill={style.color} />
+      </Group>
+    );
+  };
+
+  const renderPin = (id: string, x: number, active: boolean) => (
+    <Group
+      x={x}
+      y={12}
+      onMouseEnter={(e) => {
+        const c = e.target.getStage()?.container();
+        if (c) c.style.cursor = 'crosshair';
+      }}
+      onMouseLeave={(e) => {
+        const c = e.target.getStage()?.container();
+        if (c) c.style.cursor = '';
+      }}
+      onMouseDown={(e) => {
+        e.cancelBubble = true;
+      }}
+      onClick={(e) => {
+        e.cancelBubble = true;
+        if (connectFrom && connectFrom !== id) handleCardClick(id);
+        else startConnect(id);
+      }}
+      onTap={(e) => {
+        e.cancelBubble = true;
+        startConnect(id);
+      }}
+    >
+      <Circle radius={14} fill="transparent" />
+      <Circle y={2} radius={7} fill="rgba(0,0,0,0.35)" />
+      <Circle radius={active ? 9 : 7} fill="#c0392b" stroke="#7a1a12" strokeWidth={1} />
+      <Circle x={-2} y={-2} radius={2.2} fill="rgba(255,255,255,0.65)" />
+    </Group>
+  );
+
+  // ─── Render ───
   return (
-    <div className={`relative w-full h-[calc(100vh-64px)] ${bgClass} overflow-hidden select-none`}>
-      
-      {/* Canvas Top Left Toolbar */}
-      <div className="absolute top-4 left-4 z-30 flex items-center gap-2">
-        <button
-          onClick={handlePromptSticky}
-          className="tag-button bg-yellow-500 hover:bg-yellow-400 text-black border-yellow-300 shadow-xl"
-        >
-          <StickyNote size={14} /> + MIND PLACE NOTE
-        </button>
-      </div>
-
-      {/* Stage Navigation Control Widget (Bottom-Right) */}
-      <div className="absolute bottom-20 right-6 z-30 flex flex-col gap-1.5 bg-black/90 p-1.5 rounded-lg border border-amber-800/60 shadow-2xl backdrop-blur-md">
-        <button
-          onClick={handleZoomIn}
-          className="p-2 text-amber-300 hover:text-white hover:bg-amber-900/60 rounded transition"
-          title="Zoom In (+)"
-        >
-          <ZoomIn size={16} />
-        </button>
-
-        <button
-          onClick={handleZoomOut}
-          className="p-2 text-amber-300 hover:text-white hover:bg-amber-900/60 rounded transition"
-          title="Zoom Out (-)"
-        >
-          <ZoomOut size={16} />
-        </button>
-
-        <button
-          onClick={handleResetZoom}
-          className="p-2 text-amber-300 hover:text-white hover:bg-amber-900/60 rounded transition text-[10px] font-mono font-bold"
-          title="Reset Zoom (1:1)"
-        >
-          <Maximize2 size={16} />
-        </button>
-
-        {onAutoTidyBoard && (
-          <button
-            onClick={onAutoTidyBoard}
-            className="p-2 text-amber-300 hover:text-white hover:bg-amber-900/60 rounded transition border-t border-amber-900/40"
-            title="Auto-Tidy Grid"
-          >
-            <Grid size={16} />
-          </button>
-        )}
-      </div>
-
-      {/* String Tag Modal overlay */}
-      {pendingStringPair && (
-        <StringTagModal
-          onConfirm={(label, color) => {
-            onCreateString(pendingStringPair.from, pendingStringPair.to, label, color);
-            setPendingStringPair(null);
-          }}
-          onCancel={() => setPendingStringPair(null)}
-        />
-      )}
-
-      {/* Card Status Tag Picker Overlay */}
-      {activeMenuCardId && cards[activeMenuCardId] && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 bg-black/95 border border-amber-600 p-3 rounded-xl shadow-2xl backdrop-blur-md flex items-center gap-3 font-mono text-xs text-amber-100">
-          <span className="text-amber-400 font-bold uppercase flex items-center gap-1">
-            <Tag size={14} /> Mark Case Tag:
-          </span>
-          
-          <button
-            onClick={() => {
-              onCardStatusTag?.(activeMenuCardId, 'prime_suspect');
-              setActiveMenuCardId(null);
-            }}
-            className="px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-500 rounded text-red-200 text-xs font-marker"
-          >
-            PRIME SUSPECT
-          </button>
-
-          <button
-            onClick={() => {
-              onCardStatusTag?.(activeMenuCardId, 'verified_innocent');
-              setActiveMenuCardId(null);
-            }}
-            className="px-2.5 py-1 bg-green-950 hover:bg-green-900 border border-green-500 rounded text-green-200 text-xs font-marker"
-          >
-            VERIFIED INNOCENT
-          </button>
-
-          <button
-            onClick={() => {
-              onCardStatusTag?.(activeMenuCardId, 'key_clue');
-              setActiveMenuCardId(null);
-            }}
-            className="px-2.5 py-1 bg-yellow-950 hover:bg-yellow-900 border border-yellow-500 rounded text-yellow-200 text-xs font-marker"
-          >
-            KEY CLUE
-          </button>
-
-          <button
-            onClick={() => {
-              onCardStatusTag?.(activeMenuCardId, 'unverified');
-              setActiveMenuCardId(null);
-            }}
-            className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-600 rounded text-slate-300 text-xs"
-          >
-            CLEAR TAG
-          </button>
-
-          <button
-            onClick={() => setActiveMenuCardId(null)}
-            className="text-amber-500 text-xs ml-2"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Dynamic String Mode Banner */}
-      {selectedPinCardId && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-950/90 text-red-200 border border-red-500/60 px-5 py-2 rounded-full font-mono text-xs shadow-2xl z-30 flex items-center gap-3 animate-pulse">
-          <span>THREAD CONNECT MODE: Hover target pin to attach clue</span>
-          <button
-            onClick={() => setSelectedPinCardId(null)}
-            className="bg-red-800 hover:bg-red-700 text-white px-2 py-0.5 rounded text-[10px]"
-          >
-            CANCEL
-          </button>
-        </div>
-      )}
-
+    <div
+      ref={containerRef}
+      className={`absolute inset-0 ${bgClass} overflow-hidden`}
+      onDragOver={onDragOver}
+      onDragLeave={() => setDropActive(false)}
+      onDrop={onDrop}
+      style={{ cursor: connectFrom ? 'crosshair' : undefined }}
+    >
       <Stage
         ref={stageRef}
-        width={dimensions.width}
-        height={dimensions.height}
-        draggable={!selectedPinCardId}
+        width={size.w}
+        height={size.h}
+        scaleX={scale}
+        scaleY={scale}
+        x={pos.x}
+        y={pos.y}
+        draggable
+        onDragMove={(e) => {
+          if (e.target === stageRef.current) setPos({ x: e.target.x(), y: e.target.y() });
+        }}
+        onDragEnd={(e) => {
+          if (e.target === stageRef.current) setPos({ x: e.target.x(), y: e.target.y() });
+        }}
         onWheel={handleWheel}
         onMouseMove={handleMouseMove}
         onClick={(e) => {
           if (e.target === stageRef.current) {
-            setSelectedPinCardId(null);
-            setActiveMenuCardId(null);
+            setSelectedId(null);
+            setConnectFrom(null);
           }
         }}
-        scaleX={stageScale}
-        scaleY={stageScale}
-        x={stagePos.x}
-        y={stagePos.y}
+        onTap={(e) => {
+          if (e.target === stageRef.current) setSelectedId(null);
+        }}
       >
-        {/* Layer 1: Red Strings */}
-        <Layer>
-          {startPinCoords && liveCursorPos && (
-            <Group>
-              <Line
-                points={[startPinCoords.x, startPinCoords.y, liveCursorPos.x, liveCursorPos.y]}
-                stroke="#d63031"
-                strokeWidth={3.5}
-                dash={[6, 4]}
-                shadowColor="#d63031"
-                shadowBlur={10}
-              />
-              <Circle
-                x={liveCursorPos.x}
-                y={liveCursorPos.y}
-                radius={7}
-                fill="#d63031"
-                stroke="#ffffff"
-                strokeWidth={2}
-              />
-            </Group>
-          )}
-
-          {Object.values(strings).map((str) => {
-            const cardA = allCards[str.fromCardId];
-            const cardB = allCards[str.toCardId];
-            if (!cardA || !cardB) return null;
-
-            const pinA = getPinCoords(cardA);
-            const pinB = getPinCoords(cardB);
-
-            const midX = (pinA.x + pinB.x) / 2;
-            const midY = (pinA.y + pinB.y) / 2 + 25;
-            const isHovered = hoveredStringId === str.id;
-            const isContradiction = str.label === 'Contradiction';
-
+        {/* Strings under the cards. Layers remount once fonts load so Konva re-measures text. */}
+        <Layer key={`strings-${fontsReady}`}>
+          {Object.values(room.strings).map(str => {
+            const a = pinPoint(cards[str.fromCardId], str.fromCardId);
+            const b = pinPoint(cards[str.toCardId], str.toCardId);
+            if ((str.fromCardId.startsWith('card') || str.fromCardId.startsWith('note')) && !cards[str.fromCardId]) return null;
+            if ((str.toCardId.startsWith('card') || str.toCardId.startsWith('note')) && !cards[str.toCardId]) return null;
+            const dist = Math.hypot(b.x - a.x, b.y - a.y);
+            const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + Math.min(70, dist * 0.12) };
+            const color = STRING_COLORS[str.label];
+            const hovered = hoverString === str.id;
+            const label = t(`string.${str.label}` as TKey);
+            const labelW = Math.max(70, label.length * 7.2 + 20);
             return (
-              <Group
-                key={str.id}
-                onMouseEnter={() => setHoveredStringId(str.id)}
-                onMouseLeave={() => setHoveredStringId(null)}
-              >
-                <Line
-                  points={[pinA.x, pinA.y + 4, midX, midY + 4, pinB.x, pinB.y + 4]}
-                  stroke="rgba(0, 0, 0, 0.5)"
-                  strokeWidth={4}
-                  tension={0.4}
-                />
-
-                <Line
-                  points={[pinA.x, pinA.y, midX, midY, pinB.x, pinB.y]}
-                  stroke={isHovered ? '#ff7675' : str.color || '#d63031'}
-                  strokeWidth={isHovered ? 4.5 : 3}
-                  tension={0.4}
-                  shadowColor={isHovered ? '#ff7675' : str.color || '#d63031'}
-                  shadowBlur={isHovered ? 14 : 5}
-                />
-
-                {isContradiction && (
-                  <Group x={midX - 65} y={midY - 32}>
-                    <Rect
-                      width={130}
-                      height={16}
-                      fill="#d63031"
-                      stroke="#ffeaa7"
-                      strokeWidth={1}
-                      cornerRadius={3}
-                      shadowColor="red"
-                      shadowBlur={8}
-                    />
-                    <Text
-                      text="CONTRADDICTION EXPOSED!"
-                      width={130}
-                      align="center"
-                      padding={3}
-                      fill="#ffffff"
-                      fontSize={8}
-                      fontFamily="Special Elite"
-                      fontStyle="bold"
-                    />
-                  </Group>
-                )}
-
-                <Group x={midX - 45} y={midY - 12}>
-                  <Rect
-                    width={90}
-                    height={22}
-                    fill={isHovered ? '#2d3436' : '#1a0f07'}
-                    stroke={isHovered ? '#ff7675' : str.color || '#e5a93c'}
-                    strokeWidth={isHovered ? 2 : 1}
-                    cornerRadius={3}
-                    shadowColor="black"
-                    shadowBlur={6}
-                  />
-                  <Text
-                    text={str.label}
-                    width={90}
-                    align="center"
-                    padding={4}
-                    fill="#fbf7ee"
-                    fontSize={10}
-                    fontFamily="Courier Prime"
-                    fontStyle="bold"
-                  />
-
-                  {isHovered && (
+              <Group key={str.id} onMouseEnter={() => setHoverString(str.id)} onMouseLeave={() => setHoverString(null)}>
+                <Line points={[a.x, a.y + 5, mid.x, mid.y + 7, b.x, b.y + 5]} tension={0.5} stroke="rgba(0,0,0,0.45)" strokeWidth={3} />
+                <Line points={[a.x, a.y, mid.x, mid.y, b.x, b.y]} tension={0.5} stroke={color} strokeWidth={hovered ? 4 : 2.6} hitStrokeWidth={16} />
+                <Group x={mid.x} y={mid.y}>
+                  <Rect x={-labelW / 2} y={-11} width={labelW} height={22} cornerRadius={3} fill="#1a110a" stroke={color} strokeWidth={1} shadowColor="black" shadowBlur={6} shadowOpacity={0.6} />
+                  <Text x={-labelW / 2} y={-6} width={labelW} align="center" text={label} fontFamily={FONT_TYPED} fontStyle="bold" fontSize={11.5} fill="#f6ead2" />
+                  {hovered && (
                     <Group
-                      x={80}
-                      y={-6}
+                      x={labelW / 2 + 2}
+                      y={-12}
                       onClick={(e) => {
                         e.cancelBubble = true;
                         onDeleteString(str.id);
+                        setHoverString(null);
                       }}
                     >
-                      <Circle radius={9} fill="#d63031" stroke="#ffffff" strokeWidth={1} />
-                      <Text
-                        text="✕"
-                        x={-4}
-                        y={-5}
-                        fill="#ffffff"
-                        fontSize={10}
-                        fontStyle="bold"
-                      />
+                      <Circle radius={9} fill="#b3261e" stroke="#fff" strokeWidth={1.25} />
+                      <Line points={[-3.5, -3.5, 3.5, 3.5]} stroke="#fff" strokeWidth={1.75} />
+                      <Line points={[3.5, -3.5, -3.5, 3.5]} stroke="#fff" strokeWidth={1.75} />
                     </Group>
                   )}
                 </Group>
               </Group>
             );
           })}
+          {connectFrom && pointer && (() => {
+            const a = pinPoint(cards[connectFrom], connectFrom);
+            return <Line points={[a.x, a.y, pointer.x, pointer.y]} stroke="#d8432f" strokeWidth={2.5} dash={[8, 5]} listening={false} />;
+          })()}
         </Layer>
 
-        {/* Layer 2: Case Question Nodes & Authentic Alan Wake 2 Polaroid Cards */}
-        <Layer>
-          {/* Alan Wake 2 Mind Place Question Header Nodes */}
-          {Object.values(CASE_QUESTIONS).map((qNode) => (
-            <Group
-              key={qNode.id}
-              x={qNode.x}
-              y={qNode.y}
-            >
-              <Rect
-                width={210}
-                height={55}
-                fill="#1e1008"
-                stroke="#e5a93c"
-                strokeWidth={2}
-                cornerRadius={4}
-                shadowColor="black"
-                shadowBlur={16}
-              />
-              <Text
-                text={qNode.title}
-                x={12}
-                y={14}
-                width={186}
-                fontSize={11}
-                fontFamily="Special Elite"
-                fill="#e5a93c"
-                fontStyle="bold"
-                wrap="word"
-              />
-
-              {/* Pin Node */}
-              <Group
-                name="pinNode"
-                x={105}
-                y={10}
-                onMouseEnter={() => setHoveredPinCardId(qNode.id)}
-                onMouseLeave={() => setHoveredPinCardId(null)}
-                onClick={(e) => handlePinClick(qNode.id, e)}
-              >
-                <Circle
-                  radius={9}
-                  fill="#d63031"
-                  stroke="#ffffff"
-                  strokeWidth={2}
-                  shadowColor="black"
-                  shadowBlur={6}
-                />
+        {/* Questions and cards */}
+        <Layer key={`cards-${fontsReady}`}>
+          {QUESTION_IDS.map((qid, i) => {
+            const p = questionPos(qid);
+            const isTarget = connectFrom && connectFrom !== qid;
+            return (
+              <Group key={qid} x={p.x} y={p.y} rotation={i % 2 ? 0.8 : -0.8} onClick={() => connectFrom && handleCardClick(qid)} onTap={() => connectFrom && handleCardClick(qid)}>
+                <Rect width={QUESTION_SIZE.w} height={QUESTION_SIZE.h} fill="#fbf8f0" cornerRadius={2} shadowColor="black" shadowBlur={12} shadowOpacity={0.55} shadowOffsetY={6} stroke={isTarget ? '#d6a649' : undefined} strokeWidth={isTarget ? 3 : 0} />
+                <Line points={[0, 26, QUESTION_SIZE.w, 26]} stroke="#e6a1a1" strokeWidth={1} />
+                <Text x={0} y={33} width={QUESTION_SIZE.w} align="center" text={questionLabel[qid]} fontFamily={FONT_HAND} fontSize={16} fill="#b3261e" />
+                {renderPin(qid, QUESTION_SIZE.w / 2, connectFrom === qid)}
               </Group>
-            </Group>
-          ))}
+            );
+          })}
 
-          {/* Authentic Alan Wake 2 Polaroid Evidence Cards */}
-          {Object.values(cards).map((card) => {
-            const isPinSelected = selectedPinCardId === card.id;
-            const isPinHovered = hoveredPinCardId === card.id && selectedPinCardId && selectedPinCardId !== card.id;
-            const isHighlightedByString = highlightedCardIds.includes(card.id);
-            const isSticky = card.type === 'witness_statement' && card.title.startsWith('STICKY NOTE');
-            const statusTag = card.statusTag;
-
-            const cardWidth = 210;
-            const cardHeight = 245;
-
+          {cardList.map(card => {
+            const { w, h } = CARD_SIZE[card.kind];
+            const isSelected = selectedId === card.id;
+            const isSource = connectFrom === card.id;
+            const isTarget = !!connectFrom && connectFrom !== card.id && hoverCard === card.id;
+            const isHighlighted = highlighted.has(card.id);
             return (
               <Group
                 key={card.id}
-                x={card.x}
-                y={card.y}
-                draggable
-                onDragMove={(e) => {
-                  onCardMove(card.id, e.target.x(), e.target.y());
+                ref={(node) => {
+                  groupRefs.current[card.id] = node;
                 }}
-                onDragEnd={(e) => {
-                  onCardMove(card.id, e.target.x(), e.target.y());
+                x={card.x + w / 2}
+                y={card.y + h / 2}
+                offsetX={w / 2}
+                offsetY={h / 2}
+                rotation={card.rotation}
+                opacity={card.statusTag === 'cleared' ? 0.62 : 1}
+                draggable={!connectFrom}
+                onDragStart={(e) => {
+                  e.target.moveToTop();
+                  setSelectedId(null);
                 }}
-                onClick={(e) => {
-                  if (e.target.name() !== 'pinNode') {
-                    onSelectCardDetails(card);
-                    setActiveMenuCardId(card.id);
-                  }
+                onDragMove={(e) => onMoveCard(card.id, Math.round(e.target.x() - w / 2), Math.round(e.target.y() - h / 2), false)}
+                onDragEnd={(e) => onMoveCard(card.id, Math.round(e.target.x() - w / 2), Math.round(e.target.y() - h / 2), true)}
+                onMouseEnter={(e) => {
+                  setHoverCard(card.id);
+                  const c = e.target.getStage()?.container();
+                  if (c && !connectFrom) c.style.cursor = 'grab';
                 }}
+                onMouseLeave={(e) => {
+                  setHoverCard(null);
+                  const c = e.target.getStage()?.container();
+                  if (c && !connectFrom) c.style.cursor = '';
+                }}
+                onClick={() => handleCardClick(card.id)}
+                onTap={() => handleCardClick(card.id)}
+                onDblClick={() => card.kind !== 'note' && onInspect(card)}
+                onDblTap={() => card.kind !== 'note' && onInspect(card)}
               >
-                {/* Aged Off-White Polaroid Paper Card */}
-                <Rect
-                  width={cardWidth}
-                  height={cardHeight}
-                  fill={isSticky ? '#fed330' : '#f8f5ee'}
-                  stroke={
-                    statusTag === 'prime_suspect' ? '#d63031' :
-                    statusTag === 'verified_innocent' ? '#2ecc71' :
-                    statusTag === 'key_clue' ? '#f1c40f' :
-                    isHighlightedByString ? '#fdcb6e' : '#b8a686'
-                  }
-                  strokeWidth={statusTag || isHighlightedByString ? 3.5 : 1}
-                  cornerRadius={3}
-                  shadowColor="black"
-                  shadowBlur={isHighlightedByString ? 25 : 18}
-                  shadowOpacity={0.85}
-                  shadowOffsetY={10}
-                />
-
-                {!isSticky && (
-                  <>
-                    {/* Metal Binder Clip Header */}
-                    <Rect
-                      x={95}
-                      y={-8}
-                      width={20}
-                      height={18}
-                      fill="transparent"
-                      stroke="#a6b0b7"
-                      strokeWidth={2.5}
-                      cornerRadius={4}
-                    />
-
-                    {/* Procedural Photo Artwork */}
-                    {renderNoirArtwork(card)}
-                  </>
+                {(isSelected || isSource || isTarget || isHighlighted) && (
+                  <Rect x={-5} y={-5} width={w + 10} height={h + 10} cornerRadius={5} stroke={isTarget ? '#4caf7a' : '#d6a649'} strokeWidth={isSelected || isTarget ? 3 : 2} dash={isSource ? [6, 4] : undefined} listening={false} />
                 )}
-
-                {/* Status Tag Badge Overlay */}
-                {statusTag && statusTag !== 'unverified' && (
-                  <Group x={14} y={174}>
-                    <Rect
-                      width={182}
-                      height={16}
-                      fill={
-                        statusTag === 'prime_suspect' ? '#d63031' :
-                        statusTag === 'verified_innocent' ? '#2ecc71' : '#f1c40f'
-                      }
-                      cornerRadius={2}
-                    />
-                    <Text
-                      text={
-                        statusTag === 'prime_suspect' ? 'PRIME SUSPECT' :
-                        statusTag === 'verified_innocent' ? 'VERIFIED INNOCENT' : 'KEY CLUE'
-                      }
-                      width={182}
-                      align="center"
-                      padding={3}
-                      fill="#ffffff"
-                      fontSize={9}
-                      fontFamily="Special Elite"
-                      fontStyle="bold"
-                    />
-                  </Group>
-                )}
-
-                {/* Handwritten Polaroid Caption */}
-                <Text
-                  text={card.title}
-                  x={14}
-                  y={isSticky ? 35 : statusTag && statusTag !== 'unverified' ? 194 : 180}
-                  width={182}
-                  fontSize={isSticky ? 13 : 11}
-                  fontFamily={isSticky ? 'Permanent Marker' : 'Special Elite'}
-                  fill="#1c2530"
-                  wrap="word"
-                  maxHeight={isSticky ? 180 : 55}
-                />
-
-                {/* Push Pin Node */}
-                <Group
-                  name="pinNode"
-                  x={105}
-                  y={12}
-                  onMouseEnter={() => setHoveredPinCardId(card.id)}
-                  onMouseLeave={() => setHoveredPinCardId(null)}
-                  onClick={(e) => handlePinClick(card.id, e)}
-                >
-                  <Circle
-                    radius={isPinSelected || isPinHovered ? 12 : 8}
-                    fill={isPinHovered ? '#2ecc71' : isPinSelected ? '#e74c3c' : '#d63031'}
-                    stroke={isPinHovered ? '#ffffff' : isPinSelected ? '#ffeaa7' : '#ffffff'}
-                    strokeWidth={2}
-                    shadowColor="black"
-                    shadowBlur={isPinSelected || isPinHovered ? 10 : 4}
-                  />
-
-                  {isPinHovered && (
-                    <Circle
-                      radius={18}
-                      stroke="#2ecc71"
-                      strokeWidth={2}
-                      dash={[4, 4]}
-                    />
-                  )}
-
-                  {isPinSelected && (
-                    <Circle
-                      radius={16}
-                      stroke="#ffeaa7"
-                      strokeWidth={1.5}
-                      dash={[4, 4]}
-                    />
-                  )}
-                </Group>
+                {card.kind === 'suspect' ? renderSuspect(card) : card.kind === 'evidence' ? renderEvidence(card) : renderNote(card)}
+                {renderTag(card)}
+                {renderPin(card.id, w / 2, isSource)}
               </Group>
             );
           })}
         </Layer>
 
-        {/* Layer 3: Partner Cursor */}
-        {partnerCursor && (
-          <Layer>
-            <Group x={partnerCursor.x} y={partnerCursor.y}>
-              <Path
-                data="M0 0 L16 16 L10 17 L16 26 L12 28 L6 19 L0 24 Z"
-                fill="#2ecc71"
-                stroke="#ffffff"
-                strokeWidth={1.5}
-                shadowColor="black"
-                shadowBlur={5}
-              />
-              <Rect
-                x={14}
-                y={20}
-                width={90}
-                height={20}
-                fill="#1e272e"
-                cornerRadius={3}
-                stroke="#2ecc71"
-                strokeWidth={1}
-              />
-              <Text
-                text={partnerCursor.name || 'Partner'}
-                x={14}
-                y={24}
-                width={90}
-                align="center"
-                fill="#ffffff"
-                fontSize={10}
-                fontFamily="Inter"
-              />
+        {/* Partner presence */}
+        {partnerCursor && partner && (
+          <Layer listening={false}>
+            <Group x={partnerCursor.x} y={partnerCursor.y} scaleX={1 / scale} scaleY={1 / scale}>
+              <Path data="M0 0 L0 17 L4.5 13 L8 21 L11 19.5 L7.5 12 L13 12 Z" fill={ROLE_COLORS[partnerCursor.role]} stroke="#120b07" strokeWidth={1.25} />
+              <Rect x={14} y={16} width={partnerCursor.name.length * 7 + 16} height={20} cornerRadius={10} fill={ROLE_COLORS[partnerCursor.role]} />
+              <Text x={14} y={20.5} width={partnerCursor.name.length * 7 + 16} align="center" text={partnerCursor.name} fontFamily="Libre Franklin" fontStyle="bold" fontSize={11.5} fill="#1b1209" />
             </Group>
           </Layer>
         )}
       </Stage>
 
+      {/* Waiting for partner */}
+      {!partner && !solo && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 sheet w-[min(560px,calc(100%-32px))] rounded-lg panel shadow-2xl px-4 py-3 flex items-center gap-4">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--brass)] opacity-60" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[var(--brass)]" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[14px] font-semibold text-[var(--text)]">{t('wait.title')}</div>
+            <div className="text-[13px] text-[var(--text-dim)]">
+              {t('wait.body', { code: room.roomCode })}
+            </div>
+          </div>
+          <button
+            className="btn btn-brass shrink-0"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(inviteLink(room.roomCode));
+                onCopied();
+              } catch {
+                /* clipboard blocked */
+              }
+            }}
+          >
+            <Link2 size={15} /> {t('wait.copy')}
+          </button>
+        </div>
+      )}
+
+      {/* String mode banner */}
+      {connectFrom && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 sheet rounded-full bg-[#2a0f0b] border border-[var(--blood)] px-4 py-2 flex items-center gap-3 text-[13.5px] text-[#f6d8cf] shadow-2xl">
+          <Spline size={15} className="text-[var(--blood-bright)]" />
+          {t('board.connectHint')}
+          <button onClick={() => setConnectFrom(null)} className="rounded-full px-2.5 py-0.5 text-[12.5px] font-semibold bg-[var(--blood)] hover:bg-[var(--blood-bright)] text-white">
+            {t('board.cancel')}
+          </button>
+        </div>
+      )}
+
+      {/* Toolbar for the selected card */}
+      {selectedCard && toolbarPos && !connectFrom && (
+        <div
+          className="absolute z-20 -translate-x-1/2 -translate-y-full sheet flex items-center gap-0.5 rounded-lg panel shadow-2xl p-1"
+          style={{ left: Math.max(150, Math.min(size.w - 150, toolbarPos.x)), top: Math.max(56, toolbarPos.y) }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {selectedCard.kind !== 'note' && (
+            <ToolButton icon={<Search size={15} />} label={t('board.inspect')} onClick={() => onInspect(selectedCard)} />
+          )}
+          <ToolButton icon={<Spline size={15} />} label={t('board.connect')} onClick={() => startConnect(selectedCard.id)} />
+          <span className="mx-1 h-5 w-px bg-[var(--line)]" />
+          {(['prime_suspect', 'cleared', 'key_clue'] as StatusTag[]).map(tag => (
+            <button
+              key={tag}
+              onClick={() => onTag(selectedCard.id, selectedCard.statusTag === tag ? null : tag)}
+              className={`rounded-md px-2 py-1.5 text-[12.5px] font-semibold transition-colors ${
+                selectedCard.statusTag === tag ? 'text-white' : 'text-[var(--text-dim)] hover:bg-white/5 hover:text-[var(--text)]'
+              }`}
+              style={selectedCard.statusTag === tag ? { background: TAG_STYLE[tag].color } : undefined}
+              aria-pressed={selectedCard.statusTag === tag}
+            >
+              {t(`board.tag.${tag}` as TKey)}
+            </button>
+          ))}
+          <span className="mx-1 h-5 w-px bg-[var(--line)]" />
+          <ToolButton
+            icon={<Trash2 size={15} />}
+            label={t('board.remove')}
+            danger
+            onClick={() => {
+              onRemove(selectedCard.id);
+              setSelectedId(null);
+            }}
+          />
+          <button className="icon-btn h-8 w-8" onClick={() => setSelectedId(null)} aria-label={t('common.close')}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Empty-board hint */}
+      {!evidenceOnBoard && (
+        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 font-marker text-[22px] text-paper/45 text-center px-4">
+          ← {t('board.empty')}
+        </div>
+      )}
+
+      {dropActive && <div className="pointer-events-none absolute inset-2 rounded-xl border-2 border-dashed border-brass/70" />}
+
+      {/* Bottom-left tools */}
+      <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2">
+        {noteDraft === null ? (
+          <button onClick={() => setNoteDraft('')} className="btn bg-[#f6d55c] text-[#3a2c0a] hover:bg-[#fae17a] shadow-lg">
+            <StickyNote size={16} /> {t('board.note')}
+          </button>
+        ) : (
+          <form
+            className="sheet flex items-center gap-2 rounded-lg bg-[#f6d55c] p-1.5 shadow-xl"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (noteDraft.trim()) onAddNote(noteDraft.trim());
+              setNoteDraft(null);
+            }}
+          >
+            <input
+              autoFocus
+              value={noteDraft}
+              maxLength={160}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setNoteDraft(null)}
+              placeholder={t('board.notePrompt')}
+              className="w-64 bg-transparent px-2 py-1 font-marker text-[15px] text-[#3a2c0a] placeholder:text-[#3a2c0a]/50 outline-none"
+            />
+            <button type="submit" className="btn btn-ink py-1.5">
+              {t('board.note')}
+            </button>
+          </form>
+        )}
+        <div className="flex items-center rounded-lg panel shadow-lg">
+          <button className="icon-btn hidden sm:inline-flex" onClick={() => zoomBy(1 / 1.2)} aria-label={t('board.zoomOut')} title={t('board.zoomOut')}>
+            <ZoomOut size={16} />
+          </button>
+          <span className="hidden sm:inline w-11 text-center text-[12px] tabular text-[var(--text-faint)]">{Math.round(scale * 100)}%</span>
+          <button className="icon-btn hidden sm:inline-flex" onClick={() => zoomBy(1.2)} aria-label={t('board.zoomIn')} title={t('board.zoomIn')}>
+            <ZoomIn size={16} />
+          </button>
+          <button className="icon-btn" onClick={fitToContent} aria-label={t('board.fit')} title={`${t('board.fit')} (F)`}>
+            <Maximize size={15} />
+          </button>
+        </div>
+      </div>
+
+      {pendingString && (
+        <StringTagModal
+          onConfirm={(label) => {
+            onCreateString(pendingString.from, pendingString.to, label);
+            setPendingString(null);
+          }}
+          onCancel={() => setPendingString(null)}
+        />
+      )}
     </div>
   );
 });
+
+const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }> = ({ icon, label, onClick, danger }) => (
+  <button
+    onClick={onClick}
+    className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] font-semibold transition-colors hover:bg-white/5 ${
+      danger ? 'text-[var(--blood-bright)]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+    }`}
+  >
+    {icon}
+    {label}
+  </button>
+);

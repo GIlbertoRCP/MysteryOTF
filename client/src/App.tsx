@@ -1,472 +1,539 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { RoomState, Role, BoardCard, BoardString, EvidenceItem, AccusationSubmission } from './types';
+import {
+  AccusationResult, AccusationSubmission, BoardCard, BoardString, BoardStyle, CardKind, ChatMessage, ChatPhraseKey,
+  Difficulty, GameMode, LabState, Mystery, Player, Role, Room, StatusTag, StringLabel, ThemeKey,
+} from './types';
+import { I18nProvider, useI18n } from './i18n';
+import { soundFx } from './utils/audio';
+import { findFreeSpot, tidyPositions } from './boardLayout';
+import { cardTitle } from './cardInfo';
 import { Lobby } from './components/Lobby';
 import { HeaderBar } from './components/HeaderBar';
 import { CorkboardCanvas, CorkboardCanvasRef } from './components/CorkboardCanvas';
-import { EvidenceDrawer } from './components/EvidenceDrawer';
-import { AccusationPanel } from './components/AccusationPanel';
+import { FilesPanel } from './components/FilesPanel';
 import { EvidenceInspectorModal } from './components/EvidenceInspectorModal';
-import { CaseSynopsisModal } from './components/CaseSynopsisModal';
-import { WalkieTalkieChat, ChatMessage } from './components/WalkieTalkieChat';
-import { ActivityFeed, ActivityLogItem } from './components/ActivityFeed';
+import { CaseFileModal } from './components/CaseFileModal';
 import { InterrogationModal } from './components/InterrogationModal';
-import { HotkeyGuide } from './components/HotkeyGuide';
+import { AccusationModal } from './components/AccusationModal';
+import { RadioChat } from './components/RadioChat';
+import { Toasts, Toast } from './components/Toasts';
+import { HintsModal } from './components/HintsModal';
+import { TutorialCoach, TutorialEvent } from './components/TutorialCoach';
 
-export const App: React.FC = () => {
+interface Session {
+  code: string;
+  name: string;
+  role: Role;
+}
+
+export interface CreateCaseOptions {
+  name: string;
+  role: Role;
+  theme: ThemeKey;
+  difficulty: Difficulty;
+  seed?: string;
+  mode: GameMode;
+  assistant?: boolean;
+  tutorial?: boolean;
+  daily?: string;
+}
+
+/** Today's date in the player's own time zone, as YYYY-MM-DD. */
+export function todayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const SESSION_KEY = 'dbs-session';
+
+function loadSession(): Session | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as Session) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(s: Session | null) {
+  try {
+    if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function inviteLink(code: string) {
+  return `${window.location.origin}${window.location.pathname}?room=${code}`;
+}
+
+const Game: React.FC = () => {
+  const { lang, t } = useI18n();
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [roomState, setRoomState] = useState<RoomState | null>(null);
-  const [myRole, setMyRole] = useState<Role>('lead');
-  const [myName, setMyName] = useState<string>('');
-  const [socketId, setSocketId] = useState<string>('');
+  const [connected, setConnected] = useState(false);
+  const [room, setRoom] = useState<Room | null>(null);
+  const [mystery, setMystery] = useState<Mystery | null>(null);
+  const [me, setMe] = useState<Player | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [partnerCursor, setPartnerCursor] = useState<{ x: number; y: number; name: string; role: Role } | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [result, setResult] = useState<AccusationResult | null>(null);
+  const [hints, setHints] = useState<string[]>([]);
+  const [hintsOpen, setHintsOpen] = useState(false);
+  const [tutorialEvent, setTutorialEvent] = useState<{ type: TutorialEvent; at: number } | null>(null);
+  const fireTutorial = (type: TutorialEvent) => setTutorialEvent({ type, at: Date.now() });
+
+  const [inspectId, setInspectId] = useState<string | null>(null);
+  const [caseFileOpen, setCaseFileOpen] = useState(false);
+  const [interrogationOpen, setInterrogationOpen] = useState(false);
+  const [accusationOpen, setAccusationOpen] = useState(false);
+  const [boardStyle, setBoardStyle] = useState<BoardStyle>(() => {
+    try {
+      return (localStorage.getItem('dbs-board-style') as BoardStyle) || 'mindplace';
+    } catch {
+      return 'mindplace';
+    }
+  });
 
   const canvasRef = useRef<CorkboardCanvasRef | null>(null);
-  const [canvasTheme, setCanvasTheme] = useState<'corkboard' | 'blackboard' | 'blueprint' | 'mindplace'>('mindplace');
-  const [partnerCursor, setPartnerCursor] = useState<{ socketId: string; x: number; y: number; name?: string } | undefined>(undefined);
-  const [inspectItem, setInspectItem] = useState<EvidenceItem | null>(null);
-  const [isAccusationOpen, setIsAccusationOpen] = useState(false);
-  const [isSynopsisOpen, setIsSynopsisOpen] = useState(false);
-  const [isInterrogationOpen, setIsInterrogationOpen] = useState(false);
-  const [caseResult, setCaseResult] = useState<any>(undefined);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
+  const mysteryRef = useRef<Mystery | null>(null);
+  const meRef = useRef<Player | null>(null);
+  const tRef = useRef(t);
+  const sessionRef = useRef<Session | null>(null);
+  const roomRef = useRef<Room | null>(null);
+  roomRef.current = room;
+  mysteryRef.current = mystery;
+  meRef.current = me;
+  tRef.current = t;
 
-  const addLog = (user: string, action: string) => {
-    setActivityLogs((prev) => [
-      ...prev,
-      {
-        id: `log-${Date.now()}-${Math.random()}`,
-        user,
-        action,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      }
-    ]);
-  };
+  const invitedCode = useMemo(() => new URLSearchParams(window.location.search).get('room')?.toUpperCase() || null, []);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
-        return;
-      }
-
-      const key = e.key.toLowerCase();
-      if (key === 'escape') {
-        setIsSynopsisOpen(false);
-        setIsInterrogationOpen(false);
-        setIsAccusationOpen(false);
-        setInspectItem(null);
-      } else if (key === 'c') {
-        setIsSynopsisOpen((prev) => !prev);
-      } else if (key === 'i') {
-        setIsInterrogationOpen((prev) => !prev);
-      } else if (key === 't') {
-        handleAutoTidyBoard();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [roomState]);
-
-  useEffect(() => {
-    const backendUrl = window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin;
-    const newSocket = io(backendUrl, {
-      transports: ['websocket', 'polling']
-    });
-
-    newSocket.on('connect', () => {
-      console.log('[Socket] Connected with ID:', newSocket.id);
-      setSocketId(newSocket.id || '');
-    });
-
-    newSocket.on('room:joined', ({ roomState, assignedRole, socketId }) => {
-      console.log('[Socket] Joined room:', roomState.roomCode, 'Role:', assignedRole);
-      setRoomState(roomState);
-      setMyRole(assignedRole);
-      setSocketId(socketId);
-      addLog('System', `Joined case ${roomState.roomCode} as ${assignedRole}`);
-
-      if (Object.keys(roomState.cards).length === 0) {
-        roomState.mystery.suspects.forEach((suspect: any, idx: number) => {
-          const cardId = `card-${suspect.id}`;
-          const initialCard: BoardCard = {
-            id: cardId,
-            evidenceId: suspect.id,
-            title: `SUSPECT: ${suspect.name}`,
-            type: 'witness_statement',
-            role: 'lead',
-            x: 100 + (idx % 2) * 220,
-            y: 80 + Math.floor(idx / 2) * 230,
-            rotation: (Math.random() - 0.5) * 8,
-            placedBy: 'System',
-            placedAt: Date.now(),
-            details: suspect.bio,
-            iconType: 'user'
-          };
-          newSocket.emit('card:add', { roomCode: roomState.roomCode, card: initialCard });
-        });
-      }
-    });
-
-    newSocket.on('room:players_updated', (playersList) => {
-      setRoomState((prev) => {
-        if (!prev) return null;
-        const newPlayers: Record<string, any> = {};
-        playersList.forEach((p: any) => {
-          newPlayers[p.socketId] = p;
-        });
-        return { ...prev, players: newPlayers };
-      });
-    });
-
-    newSocket.on('card:moved', ({ cardId, x, y }) => {
-      setRoomState((prev) => {
-        if (!prev || !prev.cards[cardId]) return prev;
-        return {
-          ...prev,
-          cards: {
-            ...prev.cards,
-            [cardId]: { ...prev.cards[cardId], x, y }
-          }
-        };
-      });
-    });
-
-    newSocket.on('card:status_tagged', ({ cardId, statusTag }) => {
-      setRoomState((prev) => {
-        if (!prev || !prev.cards[cardId]) return prev;
-        return {
-          ...prev,
-          cards: {
-            ...prev.cards,
-            [cardId]: { ...prev.cards[cardId], statusTag }
-          }
-        };
-      });
-      addLog('Investigator', `Tagged card as ${statusTag ? statusTag.toUpperCase() : 'CLEAR'}`);
-    });
-
-    newSocket.on('card:added', (addedCard: BoardCard) => {
-      setRoomState((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          cards: { ...prev.cards, [addedCard.id]: addedCard }
-        };
-      });
-      addLog('Investigator', `Placed card "${addedCard.title}" on corkboard`);
-    });
-
-    newSocket.on('card:removed', (cardId: string) => {
-      setRoomState((prev) => {
-        if (!prev) return prev;
-        const newCards = { ...prev.cards };
-        delete newCards[cardId];
-        return { ...prev, cards: newCards };
-      });
-    });
-
-    newSocket.on('string:created', (newString: BoardString) => {
-      setRoomState((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          strings: { ...prev.strings, [newString.id]: newString }
-        };
-      });
-      addLog('Investigator', `Attached string tag "${newString.label}"`);
-    });
-
-    newSocket.on('string:deleted', (stringId: string) => {
-      setRoomState((prev) => {
-        if (!prev) return prev;
-        const newStrings = { ...prev.strings };
-        delete newStrings[stringId];
-        return { ...prev, strings: newStrings };
-      });
-    });
-
-    newSocket.on('presence:cursor_moved', ({ socketId, x, y }) => {
-      setPartnerCursor({ socketId, x, y, name: 'Partner' });
-    });
-
-    newSocket.on('chat:received', (msg: ChatMessage) => {
-      setChatMessages((prev) => [...prev, msg]);
-    });
-
-    newSocket.on('case:result', (result) => {
-      setCaseResult(result);
-      setIsAccusationOpen(true);
-      addLog('System', `Case submission evaluated: ${result.correct ? 'SOLVED' : 'REJECTED'}`);
-    });
-
-    setSocket(newSocket);
-
-    return () => {
-      newSocket.disconnect();
-    };
+  const pushToast = useCallback((text: string, role?: Role) => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts(prev => [...prev.slice(-3), { id, text, role }]);
+    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), 4200);
   }, []);
 
-  const handleJoinRoom = (
-    roomCode: string, 
-    name: string, 
-    role: Role, 
-    seed?: string, 
-    difficulty?: 'Novice' | 'Detective' | 'Mastermind', 
-    theme?: 'gothic' | 'cyber' | 'opera' | 'casino' | 'express'
-  ) => {
-    if (!socket) return;
-    setMyName(name);
-    socket.emit('room:join', { roomCode, playerName: name, role, seed, difficulty, theme });
-  };
+  // ─── Socket lifecycle ───
+  useEffect(() => {
+    const backendUrl = window.location.port === '5173' ? `http://${window.location.hostname}:3001` : window.location.origin;
+    const s = io(backendUrl, { transports: ['websocket', 'polling'] });
 
-  const handleCardMove = (cardId: string, x: number, y: number) => {
-    if (!socket || !roomState) return;
-    setRoomState((prev) => {
-      if (!prev || !prev.cards[cardId]) return prev;
-      return {
-        ...prev,
-        cards: { ...prev.cards, [cardId]: { ...prev.cards[cardId], x, y } }
-      };
+    s.on('connect', () => {
+      setConnected(true);
+      // Coming back after a dropped connection: rejoin the same case.
+      const session = sessionRef.current;
+      if (session) {
+        s.emit('room:join', { code: session.code, name: session.name, role: session.role, lang: localStorage.getItem('dbs-lang') || 'en' });
+      }
     });
-    socket.emit('card:move', { roomCode: roomState.roomCode, cardId, x, y });
-  };
+    s.on('disconnect', () => setConnected(false));
 
-  const handleCardStatusTag = (cardId: string, statusTag: BoardCard['statusTag']) => {
-    if (!socket || !roomState) return;
-    setRoomState((prev) => {
-      if (!prev || !prev.cards[cardId]) return prev;
-      return {
-        ...prev,
-        cards: { ...prev.cards, [cardId]: { ...prev.cards[cardId], statusTag } }
-      };
+    s.on('room:joined', ({ room, mystery, you, hints }: { room: Room; mystery: Mystery; you: Player; hints: string[] }) => {
+      setRoom(room);
+      setMystery(mystery);
+      setHints(hints || []);
+      setMe(you);
+      setJoinError(null);
+      const session = { code: room.roomCode, name: you.name, role: you.role };
+      sessionRef.current = session;
+      saveSession(session);
+      window.history.replaceState(null, '', `?room=${room.roomCode}`);
+      soundFx.paper();
     });
-    socket.emit('card:status_tag', { roomCode: roomState.roomCode, cardId, statusTag });
-  };
 
-  const handlePinEvidenceToBoard = (item: EvidenceItem) => {
-    if (!socket || !roomState) return;
-    const cardId = `card-${item.id}`;
-    if (roomState.cards[cardId]) return;
-
-    const newCard: BoardCard = {
-      id: cardId,
-      evidenceId: item.id,
-      title: item.title,
-      type: item.type,
-      role: item.assignedRole,
-      x: 350 + Math.random() * 200,
-      y: 150 + Math.random() * 200,
-      rotation: (Math.random() - 0.5) * 10,
-      placedBy: myName || myRole,
-      placedAt: Date.now(),
-      details: item.details,
-      iconType: item.iconType
-    };
-
-    socket.emit('card:add', { roomCode: roomState.roomCode, card: newCard });
-  };
-
-  const handleAddStickyNote = (text: string) => {
-    if (!socket || !roomState) return;
-    const stickyId = `sticky-${Date.now()}`;
-
-    const newStickyCard: BoardCard = {
-      id: stickyId,
-      evidenceId: stickyId,
-      title: `STICKY NOTE: ${text}`,
-      type: 'witness_statement',
-      role: myRole,
-      x: 400 + Math.random() * 100,
-      y: 200 + Math.random() * 100,
-      rotation: (Math.random() - 0.5) * 12,
-      placedBy: myName || myRole,
-      placedAt: Date.now(),
-      details: text,
-      iconType: 'sticky-note'
-    };
-
-    socket.emit('card:add', { roomCode: roomState.roomCode, card: newStickyCard });
-  };
-
-  const handleCreateString = (fromCardId: string, toCardId: string, label?: BoardString['label'], color?: string) => {
-    if (!socket || !roomState) return;
-
-    const stringId = `str-${fromCardId}-${toCardId}`;
-    const newString: BoardString = {
-      id: stringId,
-      fromCardId,
-      toCardId,
-      label: label || 'Motive',
-      color: color || '#d63031',
-      createdBy: socketId
-    };
-
-    socket.emit('string:create', { roomCode: roomState.roomCode, string: newString });
-  };
-
-  const handleDeleteString = (stringId: string) => {
-    if (!socket || !roomState) return;
-    socket.emit('string:delete', { roomCode: roomState.roomCode, stringId });
-  };
-
-  const handleAutoTidyBoard = () => {
-    if (!socket || !roomState) return;
-    const activeCards = Object.values(roomState.cards);
-    const cols = 4;
-    activeCards.forEach((card, idx) => {
-      const gridX = 100 + (idx % cols) * 220;
-      const gridY = 80 + Math.floor(idx / cols) * 230;
-      handleCardMove(card.id, gridX, gridY);
+    s.on('room:error', ({ code }: { code?: string } = {}) => {
+      sessionRef.current = null;
+      saveSession(null);
+      setRoom(null);
+      setJoinError(code === 'solo' ? 'soloTaken' : 'notFound');
+      window.history.replaceState(null, '', window.location.pathname);
     });
-    addLog('System', 'Organized corkboard into grid layout');
-  };
 
-  const handleExportBoardImage = () => {
-    if (canvasRef.current) {
-      canvasRef.current.exportSnapshot();
-      addLog('System', 'Exported high-res board snapshot PNG');
+    s.on('room:mystery', ({ mystery, hints }: { mystery: Mystery; hints: string[] }) => {
+      setMystery(mystery);
+      setHints(hints || []);
+    });
+
+    s.on('lab:update', ({ lab }: { lab: LabState }) => {
+      const before = roomRef.current?.lab?.unlocked.length ?? 0;
+      if (lab.unlocked.length > before) {
+        const id = lab.unlocked[lab.unlocked.length - 1];
+        const title = mysteryRef.current?.evidence.find(e => e.id === id)?.title ?? '';
+        soundFx.radio();
+        if (!roomRef.current?.assistant) pushToast(tRef.current('toast.labReady', { title }), 'analyst');
+      }
+      setRoom(prev => (prev ? { ...prev, lab } : prev));
+    });
+
+    s.on('case:hints', ({ hints, hintsUsed }: { hints: string[]; hintsUsed: number }) => {
+      setHints(hints);
+      setRoom(prev => (prev ? { ...prev, hintsUsed } : prev));
+      soundFx.paper();
+    });
+
+    s.on('room:players', ({ players, joined }: { players: Player[]; joined?: string }) => {
+      const prevCount = roomRef.current?.players.length ?? 0;
+      if (players.length < prevCount) pushToast(tRef.current('toast.left'));
+      setRoom(prev => (prev ? { ...prev, players } : prev));
+      if (joined) {
+        pushToast(tRef.current('toast.joined', { name: joined }));
+        soundFx.radio();
+      }
+    });
+
+    s.on('card:added', ({ card, by }: { card: BoardCard; by: string }) => {
+      setRoom(prev => (prev ? { ...prev, cards: { ...prev.cards, [card.id]: card } } : prev));
+      soundFx.pin();
+      if (by !== meRef.current?.name && mysteryRef.current) {
+        const role = mysteryRef.current.evidence.find(e => e.id === card.refId)?.role;
+        pushToast(
+          card.kind === 'note'
+            ? tRef.current('toast.note', { name: by })
+            : tRef.current('toast.pinned', { name: by, title: cardTitle(card, mysteryRef.current) }),
+          role
+        );
+      }
+    });
+
+    s.on('card:moved', ({ cardId, x, y }) => {
+      setRoom(prev => {
+        if (!prev || !prev.cards[cardId]) return prev;
+        return { ...prev, cards: { ...prev.cards, [cardId]: { ...prev.cards[cardId], x, y } } };
+      });
+    });
+
+    s.on('card:tagged', ({ cardId, tag, by }: { cardId: string; tag: StatusTag | null; by: string }) => {
+      const existing = roomRef.current?.cards[cardId];
+      if (existing && tag && by !== meRef.current?.name && mysteryRef.current) {
+        pushToast(tRef.current('toast.tagged', { name: by, title: cardTitle(existing, mysteryRef.current), tag: tRef.current(`board.tag.${tag}`) }));
+      }
+      setRoom(prev => {
+        if (!prev || !prev.cards[cardId]) return prev;
+        return { ...prev, cards: { ...prev.cards, [cardId]: { ...prev.cards[cardId], statusTag: tag ?? undefined } } };
+      });
+    });
+
+    s.on('card:removed', ({ cardId, removedStrings }: { cardId: string; removedStrings: string[] }) => {
+      setRoom(prev => {
+        if (!prev) return prev;
+        const cards = { ...prev.cards };
+        delete cards[cardId];
+        const strings = { ...prev.strings };
+        removedStrings.forEach(id => delete strings[id]);
+        return { ...prev, cards, strings };
+      });
+    });
+
+    s.on('string:created', ({ string, by }: { string: BoardString; by: string }) => {
+      setRoom(prev => (prev ? { ...prev, strings: { ...prev.strings, [string.id]: string } } : prev));
+      soundFx.string();
+      if (by !== meRef.current?.name) {
+        pushToast(tRef.current('toast.string', { name: by, label: tRef.current(`string.${string.label}`).toLowerCase() }));
+      }
+    });
+
+    s.on('string:deleted', ({ stringId }: { stringId: string }) => {
+      setRoom(prev => {
+        if (!prev) return prev;
+        const strings = { ...prev.strings };
+        delete strings[stringId];
+        return { ...prev, strings };
+      });
+    });
+
+    s.on('presence:cursor', ({ x, y, name, role }) => setPartnerCursor({ x, y, name, role }));
+
+    s.on('chat:message', (msg: ChatMessage) => {
+      setRoom(prev => (prev ? { ...prev, chat: [...prev.chat, msg] } : prev));
+      if (msg.sender !== meRef.current?.name) soundFx.radio();
+    });
+
+    s.on('case:result', (res: AccusationResult) => {
+      setResult(res);
+      setAccusationOpen(true);
+      setRoom(prev => (prev ? { ...prev, status: res.status, attemptsUsed: res.attemptsUsed, score: res.score ?? prev.score } : prev));
+      const daily = roomRef.current?.daily;
+      if (daily && res.status !== 'active') {
+        try {
+          localStorage.setItem(`dbs-daily-${daily}`, JSON.stringify({ status: res.status, score: res.score ?? 0 }));
+        } catch {
+          /* storage unavailable */
+        }
+      }
+      if (res.status === 'solved') soundFx.solved();
+      else soundFx.wrong();
+    });
+
+    setSocket(s);
+    return () => {
+      s.disconnect();
+    };
+  }, [pushToast]);
+
+  // Offer to resume a case after a page refresh.
+  const savedSession = useMemo(() => loadSession(), []);
+
+  // Tell the server when this player switches language mid-game.
+  useEffect(() => {
+    if (socket && room && me && me.lang !== lang) {
+      socket.emit('room:set_lang', { lang });
+      setMe({ ...me, lang });
     }
+  }, [lang, socket, room, me]);
+
+  // ─── Lobby actions ───
+  const createCase = (opts: CreateCaseOptions) => {
+    setJoinError(null);
+    socket?.emit('room:create', { ...opts, lang });
   };
 
-  const handleSendChatMessage = (text: string) => {
-    if (!socket || !roomState) return;
-    socket.emit('chat:message', {
-      roomCode: roomState.roomCode,
-      text,
-      sender: myName || (myRole === 'lead' ? 'Lead Detective' : 'Forensic Analyst'),
-      role: myRole
-    });
+  const joinCase = (code: string, name: string, role: Role) => {
+    setJoinError(null);
+    socket?.emit('room:join', { code: code.trim().toUpperCase(), name, role, lang });
   };
 
-  const handleSendCursor = (x: number, y: number) => {
-    if (!socket || !roomState) return;
-    socket.emit('presence:cursor', { roomCode: roomState.roomCode, x, y });
+  const leaveCase = () => {
+    socket?.emit('room:leave');
+    sessionRef.current = null;
+    saveSession(null);
+    setRoom(null);
+    setMystery(null);
+    setMe(null);
+    setResult(null);
+    setHints([]);
+    setHintsOpen(false);
+    setAccusationOpen(false);
+    window.history.replaceState(null, '', window.location.pathname);
   };
 
-  const handleSubmitAccusation = (submission: AccusationSubmission) => {
-    if (!socket || !roomState) return;
-    socket.emit('case:submit', { roomCode: roomState.roomCode, submission });
+  // ─── Board actions ───
+  const placeCard = (kind: CardKind, refId: string, at?: { x: number; y: number }, text?: string) => {
+    if (!socket || !room) return;
+    const near = at ?? canvasRef.current?.getViewCenter() ?? { x: 500, y: 500 };
+    const pos = at ? { x: at.x - 90, y: at.y - 40 } : findFreeSpot(Object.values(room.cards), kind, near);
+    socket.emit('card:add', { card: { kind, refId, text, x: pos.x, y: pos.y, rotation: (Math.random() - 0.5) * 7 } });
+    if (kind === 'evidence') fireTutorial('pinned');
   };
 
-  if (!roomState) {
-    return <Lobby onJoinRoom={handleJoinRoom} />;
+  const moveCard = (cardId: string, x: number, y: number, final: boolean) => {
+    setRoom(prev => (prev && prev.cards[cardId] ? { ...prev, cards: { ...prev.cards, [cardId]: { ...prev.cards[cardId], x, y } } } : prev));
+    if (final || Math.random() < 0.5) socket?.emit('card:move', { cardId, x, y });
+  };
+
+  const tidyBoard = () => {
+    if (!room || !mystery) return;
+    const roleOf = (c: BoardCard) => mystery.evidence.find(e => e.id === c.refId)?.role;
+    const positions = tidyPositions(Object.values(room.cards), roleOf);
+    Object.entries(positions).forEach(([id, p]) => moveCard(id, p.x, p.y, true));
+    setTimeout(() => canvasRef.current?.fitToContent(), 50);
+  };
+
+  const sendPhrase = (key: ChatPhraseKey, ref?: string, index?: number) => socket?.emit('chat:send', { phrase: { key, ref, index } });
+
+  // ─── Hotkeys ───
+  useEffect(() => {
+    if (!room) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'escape') {
+        if (caseFileOpen) fireTutorial('caseFileClosed');
+        setCaseFileOpen(false);
+        setInterrogationOpen(false);
+        setAccusationOpen(false);
+        setInspectId(null);
+      } else if (key === 'c') {
+        setCaseFileOpen(v => !v);
+        fireTutorial('caseFile');
+      }
+      else if (key === 'i') setInterrogationOpen(v => !v);
+      else if (key === 't') tidyBoard();
+      else if (key === 'f') canvasRef.current?.fitToContent();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  if (!room || !mystery || !me) {
+    return (
+      <Lobby
+        connected={connected}
+        error={joinError}
+        invitedCode={invitedCode}
+        savedSession={savedSession}
+        onCreate={createCase}
+        onJoin={joinCase}
+      />
+    );
   }
 
-  const placedCardIds = Object.values(roomState.cards).map(c => c.evidenceId);
+  const partner = room.players.find(p => p.socketId !== me.socketId);
+  const pinnedRefs = new Set(Object.values(room.cards).map(c => c.refId));
+  const inspectItem = inspectId ? mystery.evidence.find(e => e.id === inspectId) : null;
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-black text-amber-100 font-sans">
-      
-      {/* Header Bar */}
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#0b0806] text-amber-50">
       <HeaderBar
-        roomState={roomState}
-        myRole={myRole}
-        myName={myName}
-        canvasTheme={canvasTheme}
-        onSelectTheme={setCanvasTheme}
-        onOpenAccusation={() => setIsAccusationOpen((prev) => !prev)}
-        onOpenSynopsis={() => setIsSynopsisOpen((prev) => !prev)}
-        onOpenInterrogation={() => setIsInterrogationOpen((prev) => !prev)}
-        onAutoTidyBoard={handleAutoTidyBoard}
-        onExportBoardImage={handleExportBoardImage}
-      />
-
-      {/* Shared Konva Corkboard Canvas */}
-      <CorkboardCanvas
-        ref={canvasRef}
-        cards={roomState.cards}
-        strings={roomState.strings}
-        partnerCursor={partnerCursor}
-        myRole={myRole}
-        canvasTheme={canvasTheme}
-        onCardMove={handleCardMove}
-        onCardStatusTag={handleCardStatusTag}
-        onCreateString={handleCreateString}
-        onDeleteString={handleDeleteString}
-        onSelectCardDetails={(card) => {
-          const item = roomState.mystery.evidenceList.find(e => e.id === card.evidenceId);
-          if (item) {
-            setInspectItem(item);
+        room={room}
+        mystery={mystery}
+        me={me}
+        boardStyle={boardStyle}
+        onBoardStyle={(s) => {
+          setBoardStyle(s);
+          try {
+            localStorage.setItem('dbs-board-style', s);
+          } catch {
+            /* storage unavailable */
           }
         }}
-        onSendCursor={handleSendCursor}
-        onAddStickyNote={handleAddStickyNote}
+        onOpenCaseFile={() => {
+          setCaseFileOpen(true);
+          fireTutorial('caseFile');
+        }}
+        onOpenInterrogation={() => setInterrogationOpen(true)}
+        onOpenHints={() => setHintsOpen(true)}
+        onOpenAccusation={() => setAccusationOpen(true)}
+        onTidy={tidyBoard}
+        onExport={() => canvasRef.current?.exportSnapshot()}
+        onLeave={leaveCase}
+        onCopied={() => pushToast(t('toast.copied'))}
       />
 
-      {/* Fixed Left Floating Action Button for Case Dossier */}
-      <button
-        onClick={() => setIsSynopsisOpen(true)}
-        className="fixed top-20 left-4 z-40 bg-amber-950/90 hover:bg-amber-900 border border-amber-600/70 text-amber-200 text-xs font-mono px-3 py-2 rounded-lg shadow-2xl flex items-center gap-1.5 transition backdrop-blur-md"
-        title="Open Case Dossier (C)"
-      >
-        <span className="text-base">📁</span>
-        <span className="hidden sm:inline font-bold">CASE DOSSIER</span>
-      </button>
+      <div className="flex-1 flex min-h-0 relative">
+        <FilesPanel
+          mystery={mystery}
+          me={me}
+          pinnedRefs={pinnedRefs}
+          onPin={(id) => placeCard('evidence', id)}
+          onPinSuspect={(id) => placeCard('suspect', id)}
+          onInspect={(id) => setInspectId(id)}
+          onOpenSuspects={() => setCaseFileOpen(true)}
+          lab={room.lab}
+          difficulty={mystery.difficulty}
+          tutorial={room.tutorial}
+          onRequestLab={(id) => {
+            socket?.emit('lab:request', { evidenceId: id });
+            fireTutorial('lab');
+          }}
+        />
 
-      {/* Real-time Activity Feed */}
-      <ActivityFeed logs={activityLogs} />
+        <div className="flex-1 relative min-w-0">
+          <CorkboardCanvas
+            ref={canvasRef}
+            room={room}
+            mystery={mystery}
+            me={me}
+            partner={partner}
+            solo={room.mode === 'solo'}
+            boardStyle={boardStyle}
+            partnerCursor={partnerCursor}
+            onMoveCard={moveCard}
+            onDropFile={(kind, refId, at) => placeCard(kind, refId, at)}
+            onAddNote={(text) => placeCard('note', 'note', undefined, text)}
+            onTag={(cardId, tag) => socket?.emit('card:tag', { cardId, tag })}
+            onRemove={(cardId) => socket?.emit('card:remove', { cardId })}
+            onCreateString={(from, to, label: StringLabel) => {
+              socket?.emit('string:create', { from, to, label });
+              fireTutorial('string');
+            }}
+            onDeleteString={(stringId) => socket?.emit('string:delete', { stringId })}
+            onInspect={(card) => {
+              if (card.kind === 'evidence') setInspectId(card.refId);
+              else if (card.kind === 'suspect') setInterrogationOpen(true);
+            }}
+            onCursor={(x, y) => socket?.emit('presence:cursor', { x, y })}
+            onCopied={() => pushToast(t('toast.copied'))}
+          />
 
-      {/* Hotkey Guide Bar */}
-      <HotkeyGuide />
+          {(room.mode === 'duo' || room.assistant) && (
+          <RadioChat
+            messages={room.chat}
+            me={me}
+            mystery={mystery}
+            onSend={(text) => socket?.emit('chat:send', { text })}
+            onPhrase={sendPhrase}
+            solo={room.mode === 'solo'}
+          />
+          )}
 
-      {/* Private Evidence Drawer */}
-      <EvidenceDrawer
-        evidenceList={roomState.mystery.evidenceList}
-        placedCardIds={placedCardIds}
-        myRole={myRole}
-        onPinToBoard={handlePinEvidenceToBoard}
-        onInspectItem={(item) => setInspectItem(item)}
-        onOpenCaseFile={() => setIsSynopsisOpen(true)}
-      />
+          {room.tutorial && room.status === 'active' && <TutorialCoach event={tutorialEvent} onSkip={() => setRoom(prev => (prev ? { ...prev, tutorial: false } : prev))} />}
+        </div>
+      </div>
 
-      {/* Walkie Talkie Chat */}
-      <WalkieTalkieChat
-        messages={chatMessages}
-        myRole={myRole}
-        myName={myName}
-        onSendMessage={handleSendChatMessage}
-      />
+      <Toasts toasts={toasts} />
 
-      {/* Modals */}
       {inspectItem && (
         <EvidenceInspectorModal
           item={inspectItem}
-          onClose={() => setInspectItem(null)}
-          onPin={handlePinEvidenceToBoard}
-          isPinned={placedCardIds.includes(inspectItem.id)}
+          me={me}
+          isPinned={pinnedRefs.has(inspectItem.id)}
+          hasPartner={!!partner}
+          onPin={() => placeCard('evidence', inspectItem.id)}
+          onTell={() => {
+            if (!pinnedRefs.has(inspectItem.id)) placeCard('evidence', inspectItem.id);
+            sendPhrase('look_at', inspectItem.id);
+          }}
+          onClose={() => setInspectId(null)}
         />
       )}
 
-      {isSynopsisOpen && (
-        <CaseSynopsisModal
-          mystery={roomState.mystery}
-          evidenceList={roomState.mystery.evidenceList}
-          placedCardIds={placedCardIds}
-          onClose={() => setIsSynopsisOpen(false)}
+      {caseFileOpen && (
+        <CaseFileModal
+          mystery={mystery}
+          onClose={() => {
+            setCaseFileOpen(false);
+            fireTutorial('caseFileClosed');
+          }}
         />
       )}
 
-      {isInterrogationOpen && roomState && (
+      {hintsOpen && (
+        <HintsModal
+          hints={hints}
+          used={room.hintsUsed}
+          max={room.maxHints}
+          active={room.status === 'active'}
+          onReveal={() => socket?.emit('case:hint')}
+          onClose={() => setHintsOpen(false)}
+        />
+      )}
+
+      {interrogationOpen && (
         <InterrogationModal
-          mystery={roomState.mystery}
-          onClose={() => setIsInterrogationOpen(false)}
+          mystery={mystery}
+          hasPartner={!!partner}
+          onShareQuote={(suspectId, index) => sendPhrase('quote', suspectId, index)}
+          onAsk={() => fireTutorial('asked')}
+          onClose={() => setInterrogationOpen(false)}
         />
       )}
 
-      {isAccusationOpen && (
-        <AccusationPanel
-          mystery={roomState.mystery}
-          evidenceList={roomState.mystery.evidenceList}
-          myRole={myRole}
-          onClose={() => setIsAccusationOpen(false)}
-          onSubmitAccusation={handleSubmitAccusation}
-          result={caseResult}
+      {accusationOpen && (
+        <AccusationModal
+          mystery={mystery}
+          room={room}
+          result={result}
+          onSubmit={(submission: AccusationSubmission) => {
+            socket?.emit('case:submit', { submission });
+            fireTutorial('accused');
+          }}
+          onDismissResult={() => setResult(null)}
+          onClose={() => setAccusationOpen(false)}
+          onNewCase={leaveCase}
         />
       )}
-
     </div>
   );
 };
+
+export const App: React.FC = () => (
+  <I18nProvider>
+    <Game />
+  </I18nProvider>
+);
 
 export default App;

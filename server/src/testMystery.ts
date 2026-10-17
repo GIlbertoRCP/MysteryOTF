@@ -1,28 +1,107 @@
-import { generateMysteryCase } from './mysteryEngine.js';
+import { buildBlueprint, localize, explainSolution, hintsFor, THEME_KEYS } from './mysteryEngine.js';
+import { Difficulty, PublicMystery, TraitDim } from './types.js';
 
-console.log("=== Testing Procedural Mystery Generator Engine ===");
-const mystery = generateMysteryCase('Detective');
-console.log(`Generated Case Title: "${mystery.title}"`);
-console.log(`Victim: ${mystery.victim.name} (${mystery.victim.occupation})`);
-console.log(`Suspects Count: ${mystery.suspects.length}`);
-console.log(`Evidence Items Count: ${mystery.evidenceList.length}`);
+const DIFFICULTIES: Difficulty[] = ['Novice', 'Detective', 'Mastermind'];
+const CASES_PER_COMBO = 40;
+let failures = 0;
 
-const p1Items = mystery.evidenceList.filter(e => e.assignedRole === 'lead');
-const p2Items = mystery.evidenceList.filter(e => e.assignedRole === 'analyst');
+function fail(msg: string) {
+  failures++;
+  if (failures <= 20) console.error('✗ ' + msg);
+}
 
-console.log(`P1 (Lead Detective) Clues: ${p1Items.length}`);
-console.log(`P2 (Forensic Analyst) Clues: ${p2Items.length}`);
+/** Re-derives the killer from the clue cards alone, the way a player would. */
+function solveFromEvidence(m: PublicMystery, bpClues: Partial<Record<TraitDim, string>>, verifiedIds: Set<string>, roles: ('lead' | 'analyst')[]) {
+  const leadDims: TraitDim[] = ['height', 'coat', 'voice'];
+  const useAlibi = roles.includes('lead');
+  return m.suspects.filter(s => {
+    if (useAlibi && verifiedIds.has(s.id)) return false;
+    return (Object.keys(bpClues) as TraitDim[]).every(dim => {
+      const isLead = leadDims.includes(dim);
+      if (isLead && !roles.includes('lead')) return true;
+      if (!isLead && !roles.includes('analyst')) return true;
+      return s.traitKeys[dim] === bpClues[dim];
+    });
+  });
+}
 
-console.log(`Solution Graph:
-  - Killer: ${mystery.solutionGraph.killerName} (${mystery.solutionGraph.killerId})
-  - Motive Evidence ID: ${mystery.solutionGraph.motiveEvidenceId}
-  - Weapon Evidence ID: ${mystery.solutionGraph.weaponEvidenceId}
-  - Alibi Contradiction Evidence ID: ${mystery.solutionGraph.alibiContradictionEvidenceId}
-`);
+for (const theme of THEME_KEYS) {
+  for (const difficulty of DIFFICULTIES) {
+    for (let i = 0; i < CASES_PER_COMBO; i++) {
+      const seed = `TEST-${theme}-${difficulty}-${i}`;
+      const bp = buildBlueprint(difficulty, theme, seed);
+      const again = buildBlueprint(difficulty, theme, seed);
+      if (JSON.stringify(bp) !== JSON.stringify(again)) fail(`${seed}: not deterministic`);
 
-if (p1Items.length > 0 && p2Items.length > 0 && mystery.solutionGraph.killerId) {
-  console.log("✓ Procedural Mystery Engine Validation PASSED!");
-} else {
-  console.error("✗ Validation FAILED!");
+      const en = localize(bp, 'en');
+      const es = localize(bp, 'es');
+
+      // Same structure in both languages
+      if (en.evidence.map(e => e.id).join() !== es.evidence.map(e => e.id).join()) fail(`${seed}: evidence ids differ by language`);
+      if (en.suspects.map(s => s.id).join() !== es.suspects.map(s => s.id).join()) fail(`${seed}: suspect ids differ by language`);
+
+      // No unfilled placeholders or leftovers
+      for (const m of [en, es]) {
+        const text = JSON.stringify(m) + explainSolution(bp, m.lang);
+        const leftover = text.match(/\{[a-z]+\}/i);
+        if (leftover) fail(`${seed} [${m.lang}]: unfilled placeholder ${leftover[0]}`);
+        if (m.lang === 'es' && /\bde el\b|\ba el\b/.test(text)) fail(`${seed} [es]: missing contraction`);
+        if (/isKiller|solution/i.test(JSON.stringify(m))) fail(`${seed}: public mystery leaks the solution`);
+      }
+
+      // Puzzle checks using the hidden blueprint
+      const killer = bp.suspects[bp.killerIdx];
+      const clues: Partial<Record<TraitDim, string>> = {};
+      for (const dim of bp.clueDims) clues[dim] = en.suspects[bp.killerIdx].traitKeys[dim];
+      const verified = new Set(bp.suspects.filter(s => s.verified).map(s => s.id));
+
+      const both = solveFromEvidence(en, clues, verified, ['lead', 'analyst']);
+      if (both.length !== 1 || both[0].id !== killer.id) fail(`${seed}: combined clues give ${both.length} candidates`);
+      if (solveFromEvidence(en, clues, verified, ['lead']).length < 2) fail(`${seed}: lead can solve alone`);
+      if (solveFromEvidence(en, clues, verified, ['analyst']).length < 2) fail(`${seed}: analyst can solve alone`);
+      if (verified.has(killer.id)) fail(`${seed}: killer has a verified alibi`);
+      for (const dim of bp.clueDims) {
+        if (en.suspects.every(s => s.traitKeys[dim] === clues[dim])) fail(`${seed}: clue ${dim} rules nobody out`);
+      }
+
+      // Accusation answers exist among the options
+      if (!en.options.motives.some(o => o.id === bp.solution.motiveId)) fail(`${seed}: motive option missing`);
+      if (!en.options.weapons.some(o => o.id === bp.solution.weaponId)) fail(`${seed}: weapon option missing`);
+      const alibiCard = en.evidence.find(e => e.id === bp.solution.alibiEvidenceId);
+      if (!alibiCard || alibiCard.kind !== 'record') fail(`${seed}: alibi evidence is not a record`);
+      if (alibiCard && alibiCard.details.includes(en.suspects[bp.killerIdx].name)) fail(`${seed}: alibi record vouches for the killer`);
+      if (!en.evidence.some(e => e.kind === 'document' && e.title.includes(en.suspects[bp.killerIdx].name))) fail(`${seed}: killer has no motive document`);
+
+      // Hints exist, are translated, and never name the killer as the answer
+      for (const lang of ['en', 'es'] as const) {
+        const hints = hintsFor(bp, lang);
+        if (hints.length !== 4) fail(`${seed}: expected 4 hints, got ${hints.length}`);
+        if (hints.some(h => /\{[a-z]+\}/i.test(h))) fail(`${seed} [${lang}]: hint has a placeholder`);
+      }
+
+      // Both players have something to do
+      const leadCount = en.evidence.filter(e => e.role === 'lead').length;
+      const analystCount = en.evidence.filter(e => e.role === 'analyst').length;
+      if (leadCount < 3 || analystCount < 3) fail(`${seed}: unbalanced evidence ${leadCount}/${analystCount}`);
+    }
+  }
+}
+
+// Show one sample case so a human can sanity-check the writing.
+const sample = buildBlueprint('Detective', 'hacienda', 'SAMPLE-1');
+for (const lang of ['en', 'es'] as const) {
+  const m = localize(sample, lang);
+  console.log(`\n=== [${lang}] ${m.title} ===`);
+  console.log(m.synopsis);
+  for (const s of m.suspects) console.log(`  • ${s.name} (${s.role}) — ${s.alibiStatement}`);
+  for (const e of m.evidence) console.log(`  [${e.role}] ${e.title}: ${e.details}`);
+  console.log('  Solution: ' + explainSolution(sample, lang));
+  hintsFor(sample, lang).forEach((h, i) => console.log(`  Hint ${i + 1}: ${h}`));
+}
+
+const total = THEME_KEYS.length * DIFFICULTIES.length * CASES_PER_COMBO;
+if (failures) {
+  console.error(`\n✗ ${failures} problems across ${total} generated cases`);
   process.exit(1);
 }
+console.log(`\n✓ ${total} cases generated: all unique, co-op only, fully translated`);

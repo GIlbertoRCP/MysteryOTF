@@ -1,0 +1,13 @@
+# One Render web service runs the game server and serves the built client.
+# On Render: New > Blueprint, pick this repository, and it reads this file.
+services:
+  - type: web
+    name: detective-board-sync
+    runtime: node
+    plan: free
+    buildCommand: npm run setup && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

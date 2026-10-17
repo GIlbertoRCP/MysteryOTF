@@ -1,75 +1,102 @@
 export type Role = 'lead' | 'analyst';
+export type Lang = 'en' | 'es';
+export type Difficulty = 'Novice' | 'Detective' | 'Mastermind';
+export type ThemeKey = 'gothic' | 'cyber' | 'opera' | 'casino' | 'express' | 'hacienda';
 
-export interface Suspect {
+export type TraitDim = 'height' | 'coat' | 'voice' | 'hand' | 'footwear' | 'habit' | 'blood';
+
+export type EvidenceKind =
+  | 'witness'
+  | 'camera'
+  | 'record'
+  | 'document'
+  | 'diary'
+  | 'autopsy'
+  | 'smudge'
+  | 'shoeprint'
+  | 'trace'
+  | 'phone'
+  | 'scrapings'
+  | 'weapon';
+
+// ─── What clients receive (already localized, never contains the solution) ───
+
+export interface PublicSuspect {
   id: string;
   name: string;
   role: string;
+  age: number;
+  color: string;
   bio: string;
-  statedAlibi: string;
-  isKiller: boolean;
-  avatarColor: string;
-  photoStyle: string;
+  alibiPlace: string;
+  alibiStatement: string;
+  traits: Record<TraitDim, string>;
+  traitKeys: Record<TraitDim, string>;
+  interview: { q: string; a: string }[];
 }
 
-export interface EvidenceItem {
+export interface PublicEvidence {
   id: string;
+  role: Role;
+  kind: EvidenceKind;
   title: string;
-  type: 'witness_statement' | 'autopsy' | 'toxicology' | 'cctv_report' | 'fingerprint' | 'phone_log';
-  assignedRole: Role;
   summary: string;
   details: string;
-  relatedSuspectId?: string;
-  isKeyEvidence: boolean;
-  tag: 'Motive' | 'Contradiction' | 'Murder Weapon' | 'Fake Alibi' | 'Timeline';
-  iconType?: string;
 }
 
-export interface MysteryCase {
-  id: string;
+export interface PublicMystery {
+  caseId: string;
+  seed: string;
+  theme: ThemeKey;
+  difficulty: Difficulty;
+  lang: Lang;
   title: string;
-  difficulty: 'Novice' | 'Detective' | 'Mastermind';
   victim: {
     name: string;
     age: number;
     occupation: string;
-    timeOfDeath: string;
-    location: string;
+    scene: string;
+    timeWindow: string;
   };
   synopsis: string;
-  suspects: Suspect[];
-  evidenceList: EvidenceItem[];
-  solutionGraph: {
-    killerId: string;
-    killerName: string;
-    motiveEvidenceId: string;
-    weaponEvidenceId: string;
-    alibiContradictionEvidenceId: string;
-    explanation: string;
+  suspects: PublicSuspect[];
+  evidence: PublicEvidence[];
+  options: {
+    motives: { id: string; label: string }[];
+    weapons: { id: string; label: string }[];
   };
 }
 
+export interface Solution {
+  killerId: string;
+  motiveId: string;
+  weaponId: string;
+  alibiEvidenceId: string;
+}
+
+// ─── Shared board state ───
+
+export type CardKind = 'suspect' | 'evidence' | 'note';
+export type StatusTag = 'prime_suspect' | 'cleared' | 'key_clue';
+export type StringLabel = 'link' | 'motive' | 'weapon' | 'contradiction' | 'alibi';
+
 export interface BoardCard {
   id: string;
-  evidenceId: string;
-  title: string;
-  type: EvidenceItem['type'];
-  role: Role;
+  kind: CardKind;
+  refId: string;
+  text?: string;
   x: number;
   y: number;
   rotation: number;
   placedBy: string;
-  placedAt: number;
-  details?: string;
-  iconType?: string;
-  statusTag?: 'prime_suspect' | 'verified_innocent' | 'key_clue' | 'unverified';
+  statusTag?: StatusTag;
 }
 
 export interface BoardString {
   id: string;
   fromCardId: string;
   toCardId: string;
-  label: 'Motive' | 'Contradiction' | 'Murder Weapon' | 'Accomplice' | 'Alibi' | 'Timeline' | 'Fake Alibi' | 'Suspicious Link';
-  color: string;
+  label: StringLabel;
   createdBy: string;
 }
 
@@ -77,20 +104,73 @@ export interface Player {
   socketId: string;
   name: string;
   role: Role;
+  lang: Lang;
 }
 
-export interface RoomState {
+export const CHAT_PHRASES = [
+  'need_info', 'found_something', 'ready', 'agree', 'disagree', 'look_at', 'suspicious', 'innocent', 'quote',
+] as const;
+/** Lines only the scripted assistant sends */
+export const BOT_PHRASES = ['bot_hello', 'bot_lab_ready', 'bot_look', 'bot_tip', 'bot_wrong', 'bot_lab_idle'] as const;
+export type ChatPhraseKey = (typeof CHAT_PHRASES)[number];
+
+export interface ChatMessage {
+  id: string;
+  sender: string;
+  role: Role;
+  /** Free text, shown as typed */
+  text?: string;
+  /** A canned phrase each client renders in its own language */
+  phrase?: { key: ChatPhraseKey | (typeof BOT_PHRASES)[number]; ref?: string; index?: number };
+  bot?: boolean;
+  at: number;
+}
+
+export type CaseStatus = 'active' | 'solved' | 'failed';
+export type GameMode = 'duo' | 'solo';
+
+export interface LabState {
+  unlocked: string[];
+  running: { id: string; readyAt: number } | null;
+}
+
+export interface PublicRoom {
   roomCode: string;
-  mystery: MysteryCase;
-  players: Record<string, Player>;
+  players: Player[];
   cards: Record<string, BoardCard>;
   strings: Record<string, BoardString>;
+  chat: ChatMessage[];
   createdAt: number;
+  status: CaseStatus;
+  attemptsUsed: number;
+  maxAttempts: number;
+  mode: GameMode;
+  assistant: boolean;
+  tutorial: boolean;
+  daily: string | null;
+  lab: LabState | null;
+  hintsUsed: number;
+  maxHints: number;
+  score: number | null;
+  finishedAt: number | null;
 }
 
 export interface AccusationSubmission {
   suspectId: string;
-  motiveEvidenceId: string;
-  weaponEvidenceId: string;
+  motiveId: string;
+  weaponId: string;
   alibiEvidenceId: string;
+}
+
+export interface AccusationResult {
+  by: string;
+  correctCount: number;
+  status: CaseStatus;
+  attemptsUsed: number;
+  maxAttempts: number;
+  solution?: Solution;
+  explanation?: string;
+  score?: number;
+  elapsedMs?: number;
+  hintsUsed: number;
 }
