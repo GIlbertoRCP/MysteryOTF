@@ -1,10 +1,11 @@
 import {
-  Difficulty, EvidenceKind, Lang, PublicEvidence, PublicMystery, PublicSuspect, Role, Solution, ThemeKey, TraitDim,
+  Puzzle, Difficulty, EvidenceKind, Lang, PublicEvidence, PublicMystery, PublicSuspect, Role, Solution, ThemeKey, TraitDim,
 } from './types.js';
 import {
   ANALYST_DIMS, CAUSES, LEAD_DIMS, MOTIVES, T, TEXT, TRAITS, fill,
 } from './content/common.js';
 import { THEMES, THEME_KEYS } from './content/themes.js';
+import { generatePlan, Plan } from './floorPlan.js';
 
 // ─── Seeded RNG (xmur3 hash + mulberry32) ────────────────────────────────────
 class SeededRandom {
@@ -93,10 +94,18 @@ export interface Blueprint {
   cameraIdx: number;
   cameraMin: number;
   phoneMin: number;
+  todMin: number;
+  plan: Plan;
+  /** An innocent cleared by distance: seen far from the scene just before the death */
+  sighting: { suspectIdx: number; witnessIdx: number } | null;
   suspects: BlueprintSuspect[];
   killerIdx: number;
   clueDims: TraitDim[];
   slip: boolean;
+  /** Mastermind twist: an innocent who lies to cover for the killer */
+  accompliceIdx: number | null;
+  receiptPlaceIdx: number;
+  receiptMin: number;
   weapons: { weaponIdx: number; optionId: string }[];
   trueWeaponIdx: number;
   evidence: BlueprintEvidence[];
@@ -104,9 +113,9 @@ export interface Blueprint {
 }
 
 const DIFFICULTY = {
-  Novice: { suspects: 4, verified: 1, places: 3, weapons: 3, extraMotiveDocs: 1, slip: true, frame: false, prefer: 'max' },
-  Detective: { suspects: 5, verified: 2, places: 3, weapons: 3, extraMotiveDocs: 2, slip: true, frame: true, prefer: 'min+1' },
-  Mastermind: { suspects: 6, verified: 2, places: 4, weapons: 4, extraMotiveDocs: 99, slip: false, frame: true, prefer: 'min' },
+  Novice: { suspects: 4, verified: 1, places: 3, weapons: 3, extraMotiveDocs: 1, slip: true, frame: false, prefer: 'max', accomplice: 0 },
+  Detective: { suspects: 5, verified: 2, places: 3, weapons: 3, extraMotiveDocs: 2, slip: true, frame: true, prefer: 'min+1', accomplice: 0 },
+  Mastermind: { suspects: 6, verified: 2, places: 4, weapons: 4, extraMotiveDocs: 99, slip: false, frame: true, prefer: 'min', accomplice: 0.5 },
 } as const;
 
 function matching(suspects: BlueprintSuspect[], killer: BlueprintSuspect, dims: TraitDim[], useAlibi: boolean): number {
@@ -205,12 +214,38 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
   }
   const killer = suspects[killerIdx];
 
-  // Interview flavour: one innocent may confirm the habit clue, the killer may frame someone.
   const innocentIdxs = suspects.map((_, i) => i).filter(i => i !== killerIdx);
+
+  // Mastermind twist: an unverified innocent swears they were with the killer.
+  // Their own receipt puts them somewhere else, so both alibis collapse together.
+  let accompliceIdx: number | null = null;
+  const unverifiedInnocents = innocentIdxs.filter(i => !suspects[i].verified);
+  if (rng.next() < cfg.accomplice && unverifiedInnocents.length) {
+    accompliceIdx = rng.pick(unverifiedInnocents);
+    suspects[accompliceIdx].placeIdx = killer.placeIdx;
+  }
+  // The receipt comes from a place nobody claims, so no alibi check contradicts it.
+  const receiptPlaceIdx = rng.pick(th.alibiPlaces.map((_, i) => i).filter(i => !placeIdxs.includes(i)));
+  const receiptMin = startMin + rng.int(6, 24);
+
+  // Floor plan and an exact time of death (the victim's broken watch).
+  const plan = generatePlan(rng, th.alibiPlaces.length + 1, theme === 'express' ? 'linear' : 'corridor');
+  const todMin = startMin + rng.int(9, 21);
+
+  // Above Novice, one cleared innocent is cleared by distance instead of by staff:
+  // seen in their room a minute before the death, too far away to reach the scene.
+  let sighting: Blueprint['sighting'] = null;
+  const verifiedIdxs = suspects.map((s, i) => (s.verified ? i : -1)).filter(i => i >= 0);
+  if (difficulty !== 'Novice' && verifiedIdxs.length) {
+    const witnessChoices = th.witnesses.map((_, i) => i).filter(i => i !== witnessIdx);
+    sighting = { suspectIdx: rng.pick(verifiedIdxs), witnessIdx: rng.pick(witnessChoices) };
+  }
+
+  // Interview flavour: one innocent may confirm the habit clue, the killer may frame someone.
   if (clueDims.includes('habit')) suspects[rng.pick(innocentIdxs)].noticed = 'true';
   if (cfg.frame) {
     killer.noticed = 'frame';
-    killer.frameTargetIdx = rng.pick(innocentIdxs);
+    killer.frameTargetIdx = rng.pick(innocentIdxs.filter(i => i !== accompliceIdx));
   }
 
   // Weapons: the real one, a same-cause decoy when possible, then others.
@@ -245,6 +280,10 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
     const record = ev('lead', 'record', { ref: placeIdx });
     if (placeIdx === killer.placeIdx) alibiEvidenceId = record.id;
   }
+  if (sighting) ev('lead', 'sighting', { ref: sighting.suspectIdx });
+
+  // With an accomplice, the receipt is what actually breaks the alibi.
+  if (accompliceIdx !== null) alibiEvidenceId = ev('lead', 'receipt', { ref: accompliceIdx }).id;
 
   const motiveDocSuspects = [killerIdx, ...rng.shuffle(innocentIdxs).slice(0, cfg.extraMotiveDocs)];
   let motiveRole: Role = rng.next() < 0.5 ? 'lead' : 'analyst';
@@ -276,10 +315,16 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
     cameraIdx,
     cameraMin,
     phoneMin,
+    todMin,
+    plan,
+    sighting,
     suspects,
     killerIdx,
     clueDims,
     slip: cfg.slip,
+    accompliceIdx,
+    receiptPlaceIdx,
+    receiptMin,
     weapons,
     trueWeaponIdx,
     evidence: rng.shuffle(evidence),
@@ -288,8 +333,47 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
       motiveId: killer.motiveOptionId,
       weaponId: trueWeaponOption.optionId,
       alibiEvidenceId,
+      accompliceId: accompliceIdx !== null ? suspects[accompliceIdx].id : undefined,
     },
   };
+}
+
+// ─── Hands-on puzzles ───────────────────────────────────────────────────────
+
+function hashId(id: string): number {
+  let h = 0;
+  for (const ch of id) h = (h * 33 + ch.charCodeAt(0)) >>> 0;
+  return h;
+}
+
+/** Splits text into roughly equal pieces at word boundaries. */
+function tear(text: string, count: number): string[] {
+  const words = text.split(' ');
+  const per = Math.ceil(words.length / count);
+  const pieces: string[] = [];
+  for (let i = 0; i < words.length; i += per) pieces.push(words.slice(i, i + per).join(' '));
+  return pieces;
+}
+
+function makePuzzle(bp: Blueprint, e: BlueprintEvidence, details: string): Puzzle | undefined {
+  const killer = bp.suspects[bp.killerIdx];
+  switch (e.kind) {
+    case 'smudge':
+      return { type: 'hand', answer: TRAITS.hand[killer.traits.hand].key as 'left' | 'right' };
+    case 'shoeprint':
+      return { type: 'sole', answer: TRAITS.footwear[killer.traits.footwear].key };
+    case 'trace':
+      return { type: 'uv', key: TRAITS.habit[killer.traits.habit].key };
+    case 'scrapings':
+      return { type: 'blood', answer: TRAITS.blood[killer.traits.blood].key };
+    case 'diary':
+      return { type: 'cipher', shift: 3 + (hashId(e.id) % 20) };
+    case 'document':
+      // About half the documents arrive torn up.
+      return hashId(e.id) % 2 === 0 ? { type: 'torn', pieces: tear(details, 3) } : undefined;
+    default:
+      return undefined;
+  }
 }
 
 // ─── Localization ────────────────────────────────────────────────────────────
@@ -315,6 +399,7 @@ function joinNames(names: string[], lang: Lang): string {
 }
 
 export function localize(bp: Blueprint, lang: Lang): PublicMystery {
+  const puzzleFor = (e: BlueprintEvidence, details: string) => makePuzzle(bp, e, details);
   const th = THEMES[bp.theme];
   const victim = th.victims[bp.victimIdx];
   const scene = th.scenes[bp.sceneIdx];
@@ -331,6 +416,8 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
     const place = th.alibiPlaces[s.placeIdx];
     const motive = MOTIVES[s.motiveIdx];
     const isKiller = s === killer;
+    const accomplice = bp.accompliceIdx !== null ? bp.suspects[bp.accompliceIdx] : null;
+    const partner = accomplice && (isKiller ? accomplice : s === accomplice ? killer : null);
 
     let noticed = fill(TEXT.aNoticedNothing, lang);
     if (s.noticed === 'true') {
@@ -355,11 +442,17 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
       color: s.color,
       bio: fill(TEXT.bio, lang, { role: seed.role, line: fill(th.bioLines[s.bioIdx], lang, base) }),
       alibiPlace: L(place.label),
+      alibiRoomId: `room-${s.placeIdx + 1}`,
       alibiStatement: fill(TEXT.alibiStatement, lang, { ...base, place: place.name }),
       traits,
       traitKeys,
       interview: [
-        { q: fill(TEXT.qWhere, lang, base), a: fill(TEXT.aWhere, lang, { ...base, place: place.name }) },
+        {
+          q: fill(TEXT.qWhere, lang, base),
+          a: partner
+            ? fill(TEXT.aWhereTogether, lang, { ...base, place: place.name, other: nameOf(partner) })
+            : fill(TEXT.aWhere, lang, { ...base, place: place.name }),
+        },
         { q: fill(TEXT.qRelation, lang, base), a: fill(motive.deflect, lang, base) },
         {
           q: fill(TEXT.qHeard, lang, base),
@@ -373,8 +466,20 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
   });
 
   const evidence: PublicEvidence[] = bp.evidence.map(e => {
+    const scene0 = 'room-0';
+    const event: PublicEvidence['event'] =
+      e.kind === 'witness' ? { min: bp.witnessMin, roomId: scene0 }
+      : e.kind === 'camera' ? { min: bp.cameraMin, roomId: scene0 }
+      : e.kind === 'phone' ? { min: bp.phoneMin, roomId: scene0 }
+      : e.kind === 'autopsy' ? { min: bp.todMin, roomId: scene0 }
+      : e.kind === 'diary' ? { min: bp.startMin, roomId: scene0 }
+      : e.kind === 'receipt' ? { min: bp.receiptMin, roomId: `room-${bp.receiptPlaceIdx + 1}`, suspectId: bp.suspects[e.ref!].id }
+      : e.kind === 'sighting' ? { min: bp.todMin - 1, roomId: `room-${bp.suspects[e.ref!].placeIdx + 1}`, suspectId: bp.suspects[e.ref!].id }
+      : e.kind === 'weapon' ? { min: -1, roomId: `room-${e.foundPlaceIdx! + 1}` }
+      : undefined;
     const out = (title: string, summary: string, details: string): PublicEvidence => ({
-      id: e.id, role: e.role, kind: e.kind, title, summary, details,
+      id: e.id, role: e.role, kind: e.kind, title, summary, details, event, puzzle: puzzleFor(e, details),
+      weapon: e.kind === 'weapon' ? { key: th.weapons[e.ref!].key, residue: e.ref === bp.trueWeaponIdx } : undefined,
     });
 
     switch (e.kind) {
@@ -389,7 +494,7 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
         return out(
           fill(TEXT.autopsyTitle, lang, base),
           fill(TEXT.autopsySummary, lang, base),
-          fill(TEXT.autopsyDetails, lang, { ...base, cause })
+          fill(TEXT.autopsyDetails, lang, { ...base, cause, tod: formatTime(bp.todMin, lang) })
         );
       }
       case 'witness': {
@@ -424,13 +529,31 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
       }
       case 'record': {
         const place = th.alibiPlaces[e.ref!];
-        const confirmed = bp.suspects.filter(s => s.verified && s.placeIdx === e.ref).map(nameOf);
+        const confirmed = bp.suspects.filter((s, i) => s.verified && s.placeIdx === e.ref && i !== bp.sighting?.suspectIdx).map(nameOf);
         const params = { ...base, place: place.name, names: joinNames(confirmed, lang) };
         return out(
           fill(TEXT.recordTitle, lang, { place: place.label }),
           fill(TEXT.recordSummary, lang, params),
-          fill(confirmed.length ? TEXT.recordWithNames : TEXT.recordEmpty, lang, params)
+          fill(confirmed.length ? TEXT.recordWithNames : TEXT.recordEmpty, lang, params) +
+            (bp.accompliceIdx !== null && e.ref === killer.placeIdx
+              ? fill(TEXT.recordVouch, lang, { accomplice: nameOf(bp.suspects[bp.accompliceIdx]), killer: nameOf(killer) })
+              : '')
         );
+      }
+      case 'sighting': {
+        const s = bp.suspects[e.ref!];
+        const w = th.witnesses[bp.sighting!.witnessIdx];
+        const params = { ...base, witness: w.name, name: nameOf(s), place: th.alibiPlaces[s.placeIdx].name, time: formatTime(bp.todMin - 1, lang) };
+        return out(
+          fill(TEXT.sightingTitle, lang, { witness: w.label, name: nameOf(s) }),
+          fill(TEXT.sightingSummary, lang, params),
+          fill(TEXT.sightingDetails, lang, params)
+        );
+      }
+      case 'receipt': {
+        const place = th.alibiPlaces[bp.receiptPlaceIdx];
+        const params = { ...base, place: place.name, name: nameOf(bp.suspects[e.ref!]), time: formatTime(bp.receiptMin, lang) };
+        return out(fill(TEXT.receiptTitle, lang, { place: place.label }), fill(TEXT.receiptSummary, lang, params), fill(TEXT.receiptDetails, lang, params));
       }
       case 'document': {
         const s = bp.suspects[e.ref!];
@@ -464,11 +587,25 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
       occupation: L(victim.occupation),
       scene: L(scene.label),
       timeWindow: `${formatTime(bp.startMin, lang)} – ${formatTime(bp.startMin + 30, lang)}`,
+      windowStart: bp.startMin,
+      windowEnd: bp.startMin + 30,
+    },
+    plan: {
+      layout: bp.plan.layout,
+      width: bp.plan.width,
+      height: bp.plan.height,
+      corridor: bp.plan.corridor,
+      rooms: bp.plan.rooms.map(r => ({
+        id: `room-${r.idx}`,
+        label: r.idx === 0 ? L(scene.label) : L(th.alibiPlaces[r.idx - 1].label),
+        kind: r.idx === 0 ? 'scene' : 'room',
+        x: r.x, y: r.y, w: r.w, h: r.h, door: r.door, walk: r.walk,
+      })),
     },
     synopsis: fill(th.synopsis, lang, { ...base, occupation: victim.occupation, count: String(bp.suspects.length) }),
     suspects,
     evidence,
-    options: { motives: motiveOptions, weapons: weaponOptions },
+    options: { motives: motiveOptions, weapons: weaponOptions, accomplice: bp.accompliceIdx !== null },
   };
 }
 
@@ -528,12 +665,17 @@ const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 export function explainSolution(bp: Blueprint, lang: Lang): string {
   const th = THEMES[bp.theme];
   const killer = bp.suspects[bp.killerIdx];
-  return fill(TEXT.explanation, lang, {
+  const text = fill(TEXT.explanation, lang, {
     killer: th.suspects[killer.seedIdx].name,
     victim: th.victims[bp.victimIdx].name,
     weapon: th.weapons[bp.trueWeaponIdx].name,
     motive: lowerFirst(MOTIVES[killer.motiveIdx].label[lang]),
     place: th.alibiPlaces[killer.placeIdx].name,
+  });
+  if (bp.accompliceIdx === null) return text;
+  return text + fill(TEXT.explanationAccomplice, lang, {
+    accomplice: th.suspects[bp.suspects[bp.accompliceIdx].seedIdx].name,
+    receiptPlace: th.alibiPlaces[bp.receiptPlaceIdx].name,
   });
 }
 

@@ -4,6 +4,8 @@ import { Difficulty, PublicMystery, TraitDim } from './types.js';
 const DIFFICULTIES: Difficulty[] = ['Novice', 'Detective', 'Mastermind'];
 const CASES_PER_COMBO = 40;
 let failures = 0;
+let accompliceCases = 0;
+let sightingCases = 0;
 
 function fail(msg: string) {
   failures++;
@@ -68,9 +70,34 @@ for (const theme of THEME_KEYS) {
       if (!en.options.motives.some(o => o.id === bp.solution.motiveId)) fail(`${seed}: motive option missing`);
       if (!en.options.weapons.some(o => o.id === bp.solution.weaponId)) fail(`${seed}: weapon option missing`);
       const alibiCard = en.evidence.find(e => e.id === bp.solution.alibiEvidenceId);
-      if (!alibiCard || alibiCard.kind !== 'record') fail(`${seed}: alibi evidence is not a record`);
+      if (!alibiCard || (alibiCard.kind !== 'record' && alibiCard.kind !== 'receipt')) fail(`${seed}: alibi evidence is not a record or receipt`);
       if (alibiCard && alibiCard.details.includes(en.suspects[bp.killerIdx].name)) fail(`${seed}: alibi record vouches for the killer`);
       if (!en.evidence.some(e => e.kind === 'document' && e.title.includes(en.suspects[bp.killerIdx].name))) fail(`${seed}: killer has no motive document`);
+
+      // Accomplice twist: they share the killer's alibi, have no staff alibi, and a receipt breaks it
+      if (bp.accompliceIdx !== null) {
+        const acc = bp.suspects[bp.accompliceIdx];
+        if (difficulty !== 'Mastermind') fail(`${seed}: accomplice outside Mastermind`);
+        if (acc.verified || acc.placeIdx !== killer.placeIdx) fail(`${seed}: accomplice setup inconsistent`);
+        if (!bp.solution.accompliceId || alibiCard?.kind !== 'receipt') fail(`${seed}: accomplice solution incomplete`);
+        if (!alibiCard?.details.includes(en.suspects[bp.accompliceIdx].name)) fail(`${seed}: receipt does not name the accomplice`);
+        const receiptPlace = alibiCard?.title.split(': ')[1];
+        if (en.evidence.some(e => e.kind === 'record' && e.title.endsWith(`: ${receiptPlace}`))) fail(`${seed}: an alibi check contradicts the receipt`);
+        accompliceCases++;
+      }
+
+      // Floor plan covers every room; the distance clue really rules its suspect out
+      if (en.plan.rooms.length !== bp.plan.rooms.length || !en.plan.rooms.some(r => r.kind === 'scene')) fail(`${seed}: plan missing rooms`);
+      if (bp.todMin < bp.startMin || bp.todMin > bp.startMin + 30) fail(`${seed}: time of death outside window`);
+      if (bp.sighting) {
+        const s = bp.suspects[bp.sighting.suspectIdx];
+        const room = bp.plan.rooms.find(r => r.idx === s.placeIdx + 1)!;
+        if (!s.verified || s === killer) fail(`${seed}: sighting clears the wrong person`);
+        if (room.walk < 2) fail(`${seed}: sighting room is close enough to reach the scene`);
+        const name = en.suspects[bp.sighting.suspectIdx].name;
+        if (en.evidence.some(e => e.kind === 'record' && e.details.includes(name))) fail(`${seed}: sighted suspect also listed in a record`);
+        sightingCases++;
+      } else if (difficulty !== 'Novice') fail(`${seed}: expected a distance clue`);
 
       // Hints exist, are translated, and never name the killer as the answer
       for (const lang of ['en', 'es'] as const) {
@@ -104,4 +131,4 @@ if (failures) {
   console.error(`\n✗ ${failures} problems across ${total} generated cases`);
   process.exit(1);
 }
-console.log(`\n✓ ${total} cases generated: all unique, co-op only, fully translated`);
+console.log(`\n✓ ${total} cases generated: all unique, co-op only, fully translated (${accompliceCases} with an accomplice, ${sightingCases} with a distance clue)`);

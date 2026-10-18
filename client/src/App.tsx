@@ -20,6 +20,10 @@ import { RadioChat } from './components/RadioChat';
 import { Toasts, Toast } from './components/Toasts';
 import { HintsModal } from './components/HintsModal';
 import { TutorialCoach, TutorialEvent } from './components/TutorialCoach';
+import { FloorPlanModal } from './components/FloorPlanModal';
+import { TimelinePanel } from './components/TimelinePanel';
+import { WeatherLayer } from './components/WeatherLayer';
+import { GanttChart } from 'lucide-react';
 
 interface Session {
   code: string;
@@ -65,6 +69,23 @@ function saveSession(s: Session | null) {
   }
 }
 
+function readPref(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === 'on';
+  } catch {
+    return fallback;
+  }
+}
+
+function writePref(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? 'on' : 'off');
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function inviteLink(code: string) {
   return `${window.location.origin}${window.location.pathname}?room=${code}`;
 }
@@ -82,6 +103,10 @@ const Game: React.FC = () => {
   const [result, setResult] = useState<AccusationResult | null>(null);
   const [hints, setHints] = useState<string[]>([]);
   const [hintsOpen, setHintsOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [flashlight, setFlashlight] = useState(() => readPref('dbs-flashlight', false));
+  const [weather, setWeather] = useState(() => readPref('dbs-weather', !window.matchMedia('(prefers-reduced-motion: reduce)').matches));
   const [tutorialEvent, setTutorialEvent] = useState<{ type: TutorialEvent; at: number } | null>(null);
   const fireTutorial = (type: TutorialEvent) => setTutorialEvent({ type, at: Date.now() });
 
@@ -345,12 +370,14 @@ const Game: React.FC = () => {
         setCaseFileOpen(false);
         setInterrogationOpen(false);
         setAccusationOpen(false);
+        setPlanOpen(false);
         setInspectId(null);
       } else if (key === 'c') {
         setCaseFileOpen(v => !v);
         fireTutorial('caseFile');
       }
       else if (key === 'i') setInterrogationOpen(v => !v);
+      else if (key === 'p') setPlanOpen(v => !v);
       else if (key === 't') tidyBoard();
       else if (key === 'f') canvasRef.current?.fitToContent();
     };
@@ -396,6 +423,17 @@ const Game: React.FC = () => {
         }}
         onOpenInterrogation={() => setInterrogationOpen(true)}
         onOpenHints={() => setHintsOpen(true)}
+        onOpenPlan={() => setPlanOpen(true)}
+        flashlight={flashlight}
+        onFlashlight={(on) => {
+          setFlashlight(on);
+          writePref('dbs-flashlight', on);
+        }}
+        weather={weather}
+        onWeather={(on) => {
+          setWeather(on);
+          writePref('dbs-weather', on);
+        }}
         onOpenAccusation={() => setAccusationOpen(true)}
         onTidy={tidyBoard}
         onExport={() => canvasRef.current?.exportSnapshot()}
@@ -421,7 +459,7 @@ const Game: React.FC = () => {
           }}
         />
 
-        <div className="flex-1 relative min-w-0">
+        <div className={`flex-1 relative min-w-0 verdict-camera ${accusationOpen && result && result.status !== 'active' ? 'verdict-zoom' : ''}`}>
           <CorkboardCanvas
             ref={canvasRef}
             room={room}
@@ -447,7 +485,24 @@ const Game: React.FC = () => {
             }}
             onCursor={(x, y) => socket?.emit('presence:cursor', { x, y })}
             onCopied={() => pushToast(t('toast.copied'))}
+            flashlight={flashlight}
+            extraTools={
+              <button
+                onClick={() => setTimelineOpen(v => !v)}
+                aria-pressed={timelineOpen}
+                className={`btn panel shadow-lg ${timelineOpen ? 'text-[var(--brass)] border-[var(--brass-dim)]' : 'text-[var(--text)]'}`}
+                title={t('tl.title')}
+              >
+                <GanttChart size={16} /> <span className="hidden sm:inline">{t('tl.title')}</span>
+              </button>
+            }
           />
+
+          {weather && <WeatherLayer theme={mystery.theme} />}
+
+          {timelineOpen && (
+            <TimelinePanel mystery={mystery} pinnedRefs={pinnedRefs} onInspect={(id) => setInspectId(id)} onClose={() => setTimelineOpen(false)} />
+          )}
 
           {(room.mode === 'duo' || room.assistant) && (
           <RadioChat
@@ -468,6 +523,7 @@ const Game: React.FC = () => {
 
       {inspectItem && (
         <EvidenceInspectorModal
+          caseId={mystery.caseId}
           item={inspectItem}
           me={me}
           isPinned={pinnedRefs.has(inspectItem.id)}
@@ -488,6 +544,14 @@ const Game: React.FC = () => {
             setCaseFileOpen(false);
             fireTutorial('caseFileClosed');
           }}
+        />
+      )}
+
+      {planOpen && (
+        <FloorPlanModal
+          mystery={mystery}
+          visibleEvidenceIds={new Set([...pinnedRefs, ...mystery.evidence.filter(e => e.role === me.role || room.mode === 'solo').map(e => e.id)])}
+          onClose={() => setPlanOpen(false)}
         />
       )}
 

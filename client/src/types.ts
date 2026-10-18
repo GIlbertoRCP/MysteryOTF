@@ -3,7 +3,7 @@
 export type Role = 'lead' | 'analyst';
 export type Lang = 'en' | 'es';
 export type Difficulty = 'Novice' | 'Detective' | 'Mastermind';
-export type ThemeKey = 'gothic' | 'cyber' | 'opera' | 'casino' | 'express' | 'hacienda';
+export type ThemeKey = 'gothic' | 'cyber' | 'opera' | 'casino' | 'express' | 'hacienda' | 'studio' | 'arctic' | 'carnival';
 export type TraitDim = 'height' | 'coat' | 'voice' | 'hand' | 'footwear' | 'habit' | 'blood';
 
 export type EvidenceKind =
@@ -18,6 +18,8 @@ export type EvidenceKind =
   | 'trace'
   | 'phone'
   | 'scrapings'
+  | 'receipt'
+  | 'sighting'
   | 'weapon';
 
 export interface Suspect {
@@ -28,6 +30,7 @@ export interface Suspect {
   color: string;
   bio: string;
   alibiPlace: string;
+  alibiRoomId: string;
   alibiStatement: string;
   traits: Record<TraitDim, string>;
   traitKeys: Record<TraitDim, string>;
@@ -41,6 +44,37 @@ export interface Evidence {
   title: string;
   summary: string;
   details: string;
+  event?: { min: number; roomId?: string; suspectId?: string };
+  puzzle?: Puzzle;
+  weapon?: { key: string; residue: boolean };
+}
+
+export type Puzzle =
+  | { type: 'hand'; answer: 'left' | 'right' }
+  | { type: 'sole'; answer: string }
+  | { type: 'uv'; key: string }
+  | { type: 'blood'; answer: string }
+  | { type: 'torn'; pieces: string[] }
+  | { type: 'cipher'; shift: number };
+
+export interface PlanRoom {
+  id: string;
+  label: string;
+  kind: 'scene' | 'room';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  door: { x: number; y: number };
+  walk: number;
+}
+
+export interface Plan {
+  layout: 'corridor' | 'linear';
+  width: number;
+  height: number;
+  rooms: PlanRoom[];
+  corridor: { x: number; y: number; w: number; h: number } | null;
 }
 
 export interface Mystery {
@@ -56,13 +90,17 @@ export interface Mystery {
     occupation: string;
     scene: string;
     timeWindow: string;
+    windowStart: number;
+    windowEnd: number;
   };
+  plan: Plan;
   synopsis: string;
   suspects: Suspect[];
   evidence: Evidence[];
   options: {
     motives: { id: string; label: string }[];
     weapons: { id: string; label: string }[];
+    accomplice: boolean;
   };
 }
 
@@ -154,11 +192,13 @@ export interface AccusationSubmission {
   motiveId: string;
   weaponId: string;
   alibiEvidenceId: string;
+  accompliceId?: string;
 }
 
 export interface AccusationResult {
   by: string;
   correctCount: number;
+  total: number;
   status: CaseStatus;
   attemptsUsed: number;
   maxAttempts: number;
@@ -167,6 +207,7 @@ export interface AccusationResult {
     motiveId: string;
     weaponId: string;
     alibiEvidenceId: string;
+    accompliceId?: string;
   };
   explanation?: string;
   score?: number;

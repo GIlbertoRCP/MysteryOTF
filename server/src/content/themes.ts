@@ -667,6 +667,318 @@ export const THEMES: Record<ThemeKey, Theme> = {
       'Las velas arden en todos los altares por el Día de Muertos, pero esta noche, en la Hacienda Los Cipreses, un alma más se unió a los difuntos. El cuerpo de {victim} ({occupation}) apareció en {scene}, y el médico sitúa la muerte entre {window}. La fiesta se ha detenido. {count} invitados y familiares tenían motivo y oportunidad. El camino de cempasúchil lleva a alguna parte.'
     ),
   },
+
+  // ─── Hollywood film studio, 1953 ──────────────────────────────────────────
+  studio: {
+    titles: [
+      t('Death on Stage Nine', 'Muerte en el plató nueve'),
+      t('The Final Take', 'La última toma'),
+      t('Cut to Black', 'Fundido a negro'),
+    ],
+    victims: [
+      { name: 'Howard Kessler', occupation: t('studio boss', 'jefe del estudio') },
+      { name: 'Lana Delacroix', occupation: t('screen star', 'estrella de cine') },
+      { name: 'Max Albright', occupation: t('star director', 'director estrella') },
+      { name: 'Dolores Whitfield', occupation: t('gossip columnist', 'columnista de chismes') },
+    ],
+    scenes: [
+      p('stage nine', 'el plató nueve', 'Stage Nine', 'Plató nueve'),
+      p('the star trailer', 'la caravana de la estrella', 'Star Trailer', 'Caravana de la estrella'),
+      p('the screening room', 'la sala de proyección', 'Screening Room', 'Sala de proyección'),
+      p('the prop warehouse', 'el almacén de utilería', 'Prop Warehouse', 'Almacén de utilería'),
+    ],
+    alibiPlaces: [
+      p('the commissary', 'la cantina del estudio', 'Commissary', 'Cantina del estudio'),
+      p('the makeup department', 'el departamento de maquillaje', 'Makeup Department', 'Maquillaje'),
+      p('the editing bay', 'la sala de montaje', 'Editing Bay', 'Sala de montaje'),
+      p('the backlot western town', 'el pueblo del oeste del estudio', 'Backlot Western Town', 'Pueblo del oeste'),
+      p('the publicity office', 'la oficina de publicidad', 'Publicity Office', 'Oficina de publicidad'),
+    ],
+    witnesses: [
+      p('a night watchman', 'un vigilante nocturno', 'Night Watchman', 'Vigilante nocturno'),
+      p('the script girl', 'la secretaria de rodaje', 'The Script Supervisor', 'La secretaria de rodaje'),
+      p('a grip', 'un maquinista', 'Grip', 'Maquinista'),
+    ],
+    cameras: [
+      t("A publicity photographer's contact sheet", 'Una hoja de contactos del fotógrafo de publicidad'),
+      t('A screen test still', 'Un fotograma de una prueba de cámara'),
+    ],
+    floor: t('the fake snow on the soundstage floor', 'la nieve falsa del suelo del plató'),
+    phone: t('The studio switchboard', 'La centralita del estudio'),
+    suspects: [
+      { name: 'Vera Lockwood', role: t('Fading leading lady', 'Primera actriz en decadencia') },
+      { name: 'Sonny Marlowe', role: t('Stunt double', 'Doble de riesgo') },
+      { name: 'Irving Gold', role: t('Studio lawyer', 'Abogado del estudio') },
+      { name: 'Peggy Ruiz', role: t('Wardrobe supervisor', 'Jefa de vestuario') },
+      { name: 'Clifford Haynes', role: t('Blacklisted screenwriter', 'Guionista en la lista negra') },
+      { name: 'Rita Moon', role: t('Ingénue under contract', 'Joven actriz con contrato') },
+      { name: 'Buck Tanner', role: t('Cowboy star', 'Estrella de westerns') },
+      { name: 'Edith Crane', role: t("Producer's secretary", 'Secretaria del productor') },
+    ],
+    bioLines: [
+      t('Has a contract that ends the day {victim} decides', 'Tiene un contrato que termina el día que {victim} decida'),
+      t('Was thrown off the set by {victim} last week', 'Fue expulsado del plató por {victim} la semana pasada'),
+      t('Knows every catwalk and trapdoor on the lot', 'Conoce cada pasarela y trampilla del estudio'),
+      t('Is rumoured to sell secrets to the gossip papers', 'Se rumorea que vende secretos a la prensa del corazón'),
+      t('Owes the studio a fortune in advances', 'Le debe al estudio una fortuna en anticipos'),
+    ],
+    weapons: [
+      {
+        key: 'oscar', cause: 'blunt',
+        name: t('the gilded award statuette', 'la estatuilla dorada'),
+        label: t('Gilded award statuette', 'Estatuilla dorada'),
+        trace: t('flakes of gold leaf', 'escamas de pan de oro'),
+        desc: t('Heavy, gilded, and missing a little of its gold leaf at the base.', 'Pesada, dorada, y con algo de pan de oro desprendido en la base.'),
+      },
+      {
+        key: 'sandbag', cause: 'blunt',
+        name: t('the lighting sandbag', 'el saco de arena de iluminación'),
+        label: t('Lighting sandbag', 'Saco de arena de iluminación'),
+        trace: t('grains of sand and canvas threads', 'granos de arena e hilos de lona'),
+        desc: t('A canvas sandbag used to weigh down light stands, split along one seam.', 'Un saco de lona para sujetar los focos, descosido por una costura.'),
+      },
+      {
+        key: 'prop_knife', cause: 'sharp',
+        name: t('the real knife from the prop table', 'el cuchillo real de la mesa de utilería'),
+        label: t('Knife from the prop table', 'Cuchillo de utilería'),
+        trace: t('flecks of freshly sharpened steel', 'partículas de acero recién afilado'),
+        desc: t('Meant to be a rubber prop, but this one is real steel, freshly sharpened.', 'Debía ser de goma, pero este es de acero de verdad y está recién afilado.'),
+      },
+      {
+        key: 'champagne', cause: 'poison',
+        name: t('the wrap-party champagne', 'el champán de la fiesta de fin de rodaje'),
+        label: t('Wrap-party champagne', 'Champán de fin de rodaje'),
+        trace: t('cyanide', 'cianuro'),
+        desc: t('An open bottle from the trailer. The dregs test positive for cyanide.', 'Una botella abierta de la caravana. Los restos dan positivo en cianuro.'),
+      },
+      {
+        key: 'pills', cause: 'poison',
+        name: t('the bottle of sleeping pills', 'el frasco de somníferos'),
+        label: t('Bottle of sleeping pills', 'Frasco de somníferos'),
+        trace: t('a lethal dose of barbiturates', 'una dosis letal de barbitúricos'),
+        desc: t("Prescribed to someone else. Most of the barbiturates are gone.", 'Recetado a otra persona. Faltan casi todos los barbitúricos.'),
+      },
+      {
+        key: 'film', cause: 'strangle',
+        name: t('the strip of film stock', 'la tira de película'),
+        label: t('Strip of film stock', 'Tira de película'),
+        trace: t('shreds of celluloid', 'restos de celuloide'),
+        desc: t('A length of 35mm film from the editing bay, twisted and torn.', 'Un trozo de película de 35 mm de la sala de montaje, retorcido y roto.'),
+      },
+    ],
+    synopsis: t(
+      'The cameras stopped rolling at nine. By eleven, {victim} ({occupation}) was found dead in {scene}, and the studio doctor puts the death between {window}. The gates are shut and the press is circling. {count} people on the lot had a reason, and every one of them can cry on cue.',
+      'Las cámaras dejaron de rodar a las nueve. A las once, el cuerpo de {victim} ({occupation}) apareció en {scene}, y el médico del estudio sitúa la muerte entre {window}. Las puertas están cerradas y la prensa ronda. {count} personas del estudio tenían motivos, y todas saben llorar cuando se lo piden.'
+    ),
+  },
+
+  // ─── Arctic research station, 1987 ────────────────────────────────────────
+  arctic: {
+    titles: [
+      t('Whiteout at Station Borealis', 'Ventisca en la estación Borealis'),
+      t('Ninety Days of Night', 'Noventa días de noche'),
+      t('The Ice Core', 'El núcleo de hielo'),
+    ],
+    victims: [
+      { name: 'Dr. Magnus Holm', occupation: t('station director', 'director de la estación') },
+      { name: 'Dr. Ingrid Sørensen', occupation: t('lead glaciologist', 'glacióloga jefa') },
+      { name: 'Commander Ray Duquette', occupation: t('logistics chief', 'jefe de logística') },
+      { name: 'Dr. Yuki Arakawa', occupation: t('climate scientist', 'climatóloga') },
+    ],
+    scenes: [
+      p('the ice core freezer', 'el congelador de núcleos de hielo', 'Ice Core Freezer', 'Congelador de núcleos'),
+      p('the radio shack', 'la caseta de radio', 'Radio Shack', 'Caseta de radio'),
+      p('the generator room', 'la sala del generador', 'Generator Room', 'Sala del generador'),
+      p('the observation dome', 'la cúpula de observación', 'Observation Dome', 'Cúpula de observación'),
+    ],
+    alibiPlaces: [
+      p('the galley', 'la cocina', 'Galley', 'Cocina'),
+      p('the sauna', 'la sauna', 'Sauna', 'Sauna'),
+      p('the bunk module', 'el módulo de literas', 'Bunk Module', 'Módulo de literas'),
+      p('the lab module', 'el módulo de laboratorio', 'Lab Module', 'Módulo de laboratorio'),
+      p('the vehicle garage', 'el garaje de vehículos', 'Vehicle Garage', 'Garaje de vehículos'),
+    ],
+    witnesses: [
+      p('the station cook', 'la cocinera de la estación', 'The Station Cook', 'La cocinera'),
+      p('a visiting pilot', 'un piloto de paso', 'Visiting Pilot', 'Piloto de paso'),
+      p('the night mechanic', 'el mecánico de noche', 'Night Mechanic', 'Mecánico de noche'),
+    ],
+    cameras: [
+      t('The automatic weather-camera frame', 'Un fotograma de la cámara meteorológica automática'),
+      t("A Polaroid from the station's bulletin board", 'Una Polaroid del tablón de la estación'),
+    ],
+    floor: t('the frost on the rubber floor mats', 'la escarcha de las alfombrillas de goma'),
+    phone: t('The satellite radio log', 'El registro de la radio por satélite'),
+    suspects: [
+      { name: 'Dr. Petra Lindgren', role: t('Rival glaciologist', 'Glacióloga rival') },
+      { name: 'Hank Mullins', role: t('Heavy-equipment operator', 'Operador de maquinaria pesada') },
+      { name: 'Dr. Arjun Mehta', role: t('Station physician', 'Médico de la estación') },
+      { name: 'Sasha Volkov', role: t('Radio operator', 'Operadora de radio') },
+      { name: 'Erik Dahl', role: t('Graduate student', 'Estudiante de doctorado') },
+      { name: 'Colette Brun', role: t('Corporate observer', 'Observadora de la empresa') },
+      { name: 'Tomás Ibarra', role: t('Station cook', 'Cocinero de la estación') },
+      { name: 'Nadia Okonkwo', role: t('Electrical engineer', 'Ingeniera eléctrica') },
+    ],
+    bioLines: [
+      t('Has been on the ice for two winters without a break', 'Lleva dos inviernos en el hielo sin descanso'),
+      t('Argued with {victim} over the radio for anyone to hear', 'Discutió con {victim} por radio, para que lo oyera todo el mundo'),
+      t('Knows how to get outside without tripping the door alarms', 'Sabe salir sin activar las alarmas de las puertas'),
+      t('Had a research grant cancelled on {victim}’s word', 'Perdió una beca de investigación por decisión de {victim}'),
+      t('Has been sending coded messages home', 'Ha estado enviando mensajes cifrados a casa'),
+    ],
+    weapons: [
+      {
+        key: 'ice_axe', cause: 'sharp',
+        name: t('the ice axe', 'el piolet'),
+        label: t('Ice axe', 'Piolet'),
+        trace: t('chips of forged steel', 'esquirlas de acero forjado'),
+        desc: t('A mountaineering axe from the gear locker, its pick recently wiped.', 'Un piolet del armario del equipo, con la punta recién limpiada.'),
+      },
+      {
+        key: 'core_drill', cause: 'sharp',
+        name: t('the hand core drill', 'la barrena manual'),
+        label: t('Hand core drill', 'Barrena manual'),
+        trace: t('a ring of aluminium filings', 'un anillo de limaduras de aluminio'),
+        desc: t('An aluminium ice-coring drill with a cutting crown, smeared and bent.', 'Una barrena de aluminio para sacar núcleos de hielo, manchada y doblada.'),
+      },
+      {
+        key: 'wrench', cause: 'blunt',
+        name: t('the pipe wrench', 'la llave de tubo'),
+        label: t('Pipe wrench', 'Llave de tubo'),
+        trace: t('black flakes of cast iron', 'escamas negras de hierro fundido'),
+        desc: t('A heavy cast-iron wrench from the generator room.', 'Una pesada llave de hierro fundido de la sala del generador.'),
+      },
+      {
+        key: 'core_sample', cause: 'blunt',
+        name: t('the frozen ice core', 'el núcleo de hielo congelado'),
+        label: t('Frozen ice core', 'Núcleo de hielo'),
+        trace: t('meltwater with ancient volcanic ash', 'agua de deshielo con ceniza volcánica antigua'),
+        desc: t('A metre-long cylinder of ancient ice, cracked at one end. It contains a layer of volcanic ash.', 'Un cilindro de hielo antiguo de un metro, agrietado en un extremo. Contiene una capa de ceniza volcánica.'),
+      },
+      {
+        key: 'methanol', cause: 'poison',
+        name: t('the flask of “vodka”', 'la petaca de «vodka»'),
+        label: t('Flask of “vodka”', 'Petaca de «vodka»'),
+        trace: t('methanol from the fuel stores', 'metanol del almacén de combustible'),
+        desc: t('It smells like vodka, but the lab finds methanol from the fuel stores.', 'Huele a vodka, pero el laboratorio encuentra metanol del almacén de combustible.'),
+      },
+      {
+        key: 'tow_rope', cause: 'strangle',
+        name: t('the snowmobile tow rope', 'la cuerda de remolque de la motonieve'),
+        label: t('Snowmobile tow rope', 'Cuerda de remolque'),
+        trace: t('orange nylon fibres', 'fibras de nailon naranja'),
+        desc: t('Bright orange nylon, frayed where it was pulled tight.', 'Nailon naranja brillante, deshilachado donde se tensó.'),
+      },
+    ],
+    synopsis: t(
+      'The storm cut Station Borealis off from the world three days ago. Tonight, {victim} ({occupation}) was found dead in {scene}, and the station physician puts the death between {window}. No plane can land until the wind drops. {count} people share these corridors, and one of them is a killer.',
+      'La tormenta dejó a la estación Borealis aislada del mundo hace tres días. Esta noche, el cuerpo de {victim} ({occupation}) apareció en {scene}, y el médico de la estación sitúa la muerte entre {window}. Ningún avión puede aterrizar hasta que amaine el viento. {count} personas comparten estos pasillos, y una de ellas ha matado.'
+    ),
+  },
+
+  // ─── Venetian masquerade, 1760s ───────────────────────────────────────────
+  carnival: {
+    titles: [
+      t('Masks of Venice', 'Máscaras de Venecia'),
+      t('Death at the Carnival Ball', 'Muerte en el baile de carnaval'),
+      t('The Last Gondola', 'La última góndola'),
+    ],
+    victims: [
+      { name: 'Count Alvise Morosini', occupation: t('Venetian senator', 'senador veneciano') },
+      { name: 'Contessa Bianca Foscari', occupation: t('carnival hostess', 'anfitriona del carnaval') },
+      { name: 'Signor Ottavio Grimani', occupation: t('glass merchant', 'comerciante de vidrio') },
+      { name: 'Madame Celestine Arnaud', occupation: t('French envoy', 'enviada francesa') },
+    ],
+    scenes: [
+      p('the mirror gallery', 'la galería de los espejos', 'Mirror Gallery', 'Galería de los espejos'),
+      p('the water-gate landing', 'el embarcadero de la puerta de agua', 'Water-Gate Landing', 'Embarcadero'),
+      p('the card room', 'el salón de naipes', 'Card Room', 'Salón de naipes'),
+      p('the rooftop altana', 'la altana de la azotea', 'Rooftop Altana', 'Altana de la azotea'),
+    ],
+    alibiPlaces: [
+      p('the ballroom', 'el salón de baile', 'Ballroom', 'Salón de baile'),
+      p('the chapel', 'la capilla', 'Chapel', 'Capilla'),
+      p('the music salon', 'el salón de música', 'Music Salon', 'Salón de música'),
+      p('the garden courtyard', 'el patio del jardín', 'Garden Courtyard', 'Patio del jardín'),
+      p('the wine cellar', 'la bodega', 'Wine Cellar', 'Bodega'),
+    ],
+    witnesses: [
+      p('a gondolier', 'un gondolero', 'Gondolier', 'Gondolero'),
+      p('the maid', 'la doncella', 'The Maid', 'La doncella'),
+      p('a footman', 'un lacayo', 'Footman', 'Lacayo'),
+    ],
+    cameras: [
+      t("A court painter's sketch of the ball", 'Un boceto del baile hecho por el pintor de la corte'),
+      t('A silhouette cut by the paper artist', 'Una silueta recortada por el artista del papel'),
+    ],
+    floor: t('the spilled candle wax on the terrazzo', 'la cera derramada sobre el terrazo'),
+    phone: t('The message boy at the gate', 'El mensajero de la puerta'),
+    suspects: [
+      { name: 'Lorenzo Venier', role: t('Disgraced nephew', 'Sobrino deshonrado') },
+      { name: 'Isabella Contarini', role: t('Former fiancée', 'Antigua prometida') },
+      { name: 'Fra Matteo', role: t('Confessor', 'Confesor') },
+      { name: 'Giulia Barbaro', role: t('Rival glassmaker', 'Vidriera rival') },
+      { name: 'Captain Nicolò Zeno', role: t('Naval officer', 'Oficial de la armada') },
+      { name: 'Chiara Dandolo', role: t('Lady-in-waiting', 'Dama de compañía') },
+      { name: 'Signor Pietro Loredan', role: t('Moneylender', 'Prestamista') },
+      { name: 'Marguerite Duval', role: t('Opera singer', 'Cantante de ópera') },
+    ],
+    bioLines: [
+      t('Wore a different mask every hour of the ball', 'Llevó una máscara distinta cada hora del baile'),
+      t('Was seen whispering with {victim} on the stairs', 'Se le vio cuchichear con {victim} en la escalera'),
+      t('Knows the secret passages behind the mirrors', 'Conoce los pasadizos secretos tras los espejos'),
+      t('Lost a fortune to {victim} at cards last season', 'Perdió una fortuna con {victim} a las cartas la temporada pasada'),
+      t('Is said to carry letters for the Council of Ten', 'Se dice que lleva cartas para el Consejo de los Diez'),
+    ],
+    weapons: [
+      {
+        key: 'stiletto', cause: 'sharp',
+        name: t('the stiletto from a mask case', 'el estilete del estuche de una máscara'),
+        label: t('Stiletto', 'Estilete'),
+        trace: t('traces of steel from a narrow, three-sided blade', 'restos de acero de una hoja estrecha de tres filos'),
+        desc: t('A slim triangular blade hidden in a velvet mask case.', 'Una fina hoja triangular escondida en un estuche de máscara de terciopelo.'),
+      },
+      {
+        key: 'glass_shard', cause: 'sharp',
+        name: t('the shard of Murano glass', 'el fragmento de cristal de Murano'),
+        label: t('Shard of Murano glass', 'Fragmento de cristal de Murano'),
+        trace: t('specks of red Murano glass', 'motas de cristal rojo de Murano'),
+        desc: t('A dagger-shaped piece of a red Murano chandelier.', 'Un trozo con forma de daga de una lámpara roja de Murano.'),
+      },
+      {
+        key: 'candelabra', cause: 'blunt',
+        name: t('the silver candelabra', 'el candelabro de plata'),
+        label: t('Silver candelabra', 'Candelabro de plata'),
+        trace: t('drops of candle wax and tarnished silver', 'gotas de cera y plata ennegrecida'),
+        desc: t('Five branches, heavy silver, wax still clinging to it.', 'Cinco brazos, plata pesada, aún con cera pegada.'),
+      },
+      {
+        key: 'oar', cause: 'blunt',
+        name: t("the gondolier's oar", 'el remo del gondolero'),
+        label: t("Gondolier's oar", 'Remo de gondolero'),
+        trace: t('splinters of beech wood and canal water', 'astillas de haya y agua del canal'),
+        desc: t('A long beech oar, still wet, with a split near the blade.', 'Un largo remo de haya, aún mojado, con una grieta cerca de la pala.'),
+      },
+      {
+        key: 'wine', cause: 'poison',
+        name: t('the goblet of wine', 'la copa de vino'),
+        label: t('Goblet of wine', 'Copa de vino'),
+        trace: t('arsenic', 'arsénico'),
+        desc: t('A gilded goblet left in the card room. The wine tests positive for arsenic.', 'Una copa dorada abandonada en el salón de naipes. El vino da positivo en arsénico.'),
+      },
+      {
+        key: 'sash', cause: 'strangle',
+        name: t('the silk carnival sash', 'la banda de seda del carnaval'),
+        label: t('Silk carnival sash', 'Banda de seda'),
+        trace: t('gold-thread silk fibres', 'fibras de seda con hilo de oro'),
+        desc: t('A sash embroidered with gold thread, torn from a costume.', 'Una banda bordada con hilo de oro, arrancada de un disfraz.'),
+      },
+    ],
+    synopsis: t(
+      'Behind the masks of the carnival ball, someone came to kill. {victim} ({occupation}) was found dead in {scene} as the musicians played on, and the physician puts the death between {window}. The canals are closed by order of the Doge. {count} guests had a reason, and every one of them wore a mask.',
+      'Tras las máscaras del baile de carnaval, alguien vino a matar. El cuerpo de {victim} ({occupation}) apareció en {scene} mientras los músicos seguían tocando, y el médico sitúa la muerte entre {window}. Los canales están cerrados por orden del Dux. {count} invitados tenían un motivo, y todos llevaban máscara.'
+    ),
+  },
 };
 
 export const THEME_KEYS = Object.keys(THEMES) as ThemeKey[];

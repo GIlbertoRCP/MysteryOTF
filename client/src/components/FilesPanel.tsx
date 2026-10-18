@@ -4,6 +4,7 @@ import { Difficulty, Evidence, LabState, Mystery, Player, Role } from '../types'
 import { useI18n, TKey } from '../i18n';
 import { ROLE_COLORS, initials } from '../cardInfo';
 import { KindIcon, KIND_ORDER } from './KindIcon';
+import { useIsPhone } from '../utils/device';
 
 interface FilesPanelProps {
   mystery: Mystery;
@@ -60,11 +61,21 @@ function useSeen(caseId: string) {
 }
 
 export const FilesPanel: React.FC<FilesPanelProps> = ({
-  mystery, me, pinnedRefs, onPin, onPinSuspect, onInspect, onOpenSuspects, lab, difficulty, tutorial, onRequestLab,
+  mystery, me, pinnedRefs, onPin: pinEvidence, onPinSuspect: pinSuspect, onInspect, onOpenSuspects, lab, difficulty, tutorial, onRequestLab,
 }) => {
   const { t } = useI18n();
   const solo = !!lab;
+  const isPhone = useIsPhone();
   const [open, setOpen] = useState(() => window.innerWidth >= 900);
+  // On phones the panel is a bottom sheet that gets out of the way after pinning.
+  const onPin = (id: string) => {
+    pinEvidence(id);
+    if (isPhone) setOpen(false);
+  };
+  const onPinSuspect = (id: string) => {
+    pinSuspect(id);
+    if (isPhone) setOpen(false);
+  };
   const [tab, setTab] = useState<'files' | 'lab' | 'suspects'>('files');
   const { seen, markSeen } = useSeen(mystery.caseId);
   const now = useNow(!!lab?.running);
@@ -91,6 +102,22 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
         ? t(key === 'lab' ? 'files.tab.lab' : 'files.tab.field')
         : t(me.role === 'lead' ? 'files.lead' : 'files.analyst');
 
+  if (!open && isPhone) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="absolute top-3 left-3 z-20 btn panel shadow-lg text-[var(--text)]"
+      >
+        <PanelLeftOpen size={16} /> {t('files.open')}
+        {unseenCount > 0 && (
+          <span className="rounded-full px-1.5 text-[11px] font-bold text-[#1b1209]" style={{ background: roleColor }}>
+            {unseenCount}
+          </span>
+        )}
+      </button>
+    );
+  }
+
   if (!open) {
     return (
       <aside className="w-12 shrink-0 bg-[var(--bg-raised)] border-r border-[var(--line)] flex flex-col items-center py-3 gap-3 z-20">
@@ -106,8 +133,16 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
     );
   }
 
-  return (
-    <aside className="w-[300px] shrink-0 bg-[var(--bg-raised)] border-r border-[var(--line)] flex flex-col z-20 min-h-0">
+  const panel = (
+    <aside
+      className={
+        isPhone
+          ? 'sheet w-full max-h-[78vh] rounded-t-2xl bg-[var(--bg-raised)] border-t border-[var(--line-strong)] flex flex-col min-h-0 shadow-2xl'
+          : 'w-[300px] shrink-0 bg-[var(--bg-raised)] border-r border-[var(--line)] flex flex-col z-20 min-h-0'
+      }
+      onClick={(e) => e.stopPropagation()}
+    >
+      {isPhone && <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-white/20" aria-hidden />}
       <div className="flex items-center gap-2 px-3 pt-3">
         <span className="h-2.5 w-2.5 rounded-full" style={{ background: solo ? 'var(--brass)' : roleColor }} />
         <h2 className="font-typewriter text-[16px] text-[var(--paper)] flex-1">{solo ? t('files.title') : t(`role.${me.role}` as TKey)}</h2>
@@ -146,8 +181,8 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
               {tab === 'lab'
                 ? t('files.lab.hint', { s: tutorial ? 6 : LAB_SECONDS[difficulty] })
                 : solo
-                  ? `${t('files.solo')} ${t('files.dragHint')}`
-                  : `${t('files.onlyYou')} ${t('files.dragHint')}`}
+                  ? `${t('files.solo')} ${t(isPhone ? 'files.pinHint' : 'files.dragHint')}`
+                  : `${t('files.onlyYou')} ${t(isPhone ? 'files.pinHint' : 'files.dragHint')}`}
             </p>
             <ul className="space-y-1">
               {mine.map(item => {
@@ -286,4 +321,13 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
       </div>
     </aside>
   );
+
+  if (isPhone) {
+    return (
+      <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/60 overlay-fade" onClick={() => setOpen(false)}>
+        {panel}
+      </div>
+    );
+  }
+  return panel;
 };

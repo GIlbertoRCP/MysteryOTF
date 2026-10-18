@@ -9,18 +9,22 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^9.99.7",
+    "@react-three/fiber": "^8.15.19",
     "canvas-confetti": "^1.9.3",
     "konva": "^9.3.6",
     "lucide-react": "^0.378.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-konva": "^18.2.10",
-    "socket.io-client": "^4.7.5"
+    "socket.io-client": "^4.7.5",
+    "three": "^0.160.1"
   },
   "devDependencies": {
     "@types/canvas-confetti": "^1.6.4",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.160.0",
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",

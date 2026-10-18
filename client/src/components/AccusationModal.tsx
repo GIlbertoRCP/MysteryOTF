@@ -22,12 +22,14 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
   const [motiveId, setMotiveId] = useState('');
   const [weaponId, setWeaponId] = useState('');
   const [alibiEvidenceId, setAlibiEvidenceId] = useState('');
+  const [accompliceId, setAccompliceId] = useState('');
+  const needsAccomplice = mystery.options.accomplice;
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
   const elapsed = useElapsed(room.createdAt, room.status !== 'active');
   const attemptsLeft = room.maxAttempts - room.attemptsUsed;
-  const records = mystery.evidence.filter(e => e.kind === 'record');
-  const complete = suspectId && motiveId && weaponId && alibiEvidenceId;
+  const records = mystery.evidence.filter(e => e.kind === 'record' || e.kind === 'receipt');
+  const complete = suspectId && motiveId && weaponId && alibiEvidenceId && (!needsAccomplice || accompliceId);
 
   useEffect(() => {
     setSubmitting(false);
@@ -87,7 +89,7 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
                 ? t('acc.result.solved')
                 : status === 'failed'
                   ? t('acc.result.failed')
-                  : t('acc.result.partial', { n: result?.correctCount ?? 0 })}
+                  : t('acc.result.partial', { n: result?.correctCount ?? 0, total: result?.total ?? 4 })}
             </span>
           </div>
 
@@ -156,7 +158,7 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
           e.preventDefault();
           if (!complete || submitting) return;
           setSubmitting(true);
-          onSubmit({ suspectId, motiveId, weaponId, alibiEvidenceId });
+          onSubmit({ suspectId, motiveId, weaponId, alibiEvidenceId, accompliceId: needsAccomplice ? accompliceId : undefined });
         }}
       >
         <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-6 py-4">
@@ -200,6 +202,28 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
               })}
             </div>
           </fieldset>
+
+          {needsAccomplice && (
+            <fieldset>
+              <legend className="text-[15px] font-semibold text-[var(--text)] mb-1">{t('acc.accomplice')}</legend>
+              <p className="text-[13px] text-[var(--text-dim)] mb-3">{t('acc.accompliceHint')}</p>
+              <div className="flex flex-wrap gap-2">
+                {mystery.suspects.filter(s => s.id !== suspectId).map(s => (
+                  <button
+                    type="button"
+                    key={s.id}
+                    onClick={() => setAccompliceId(s.id)}
+                    aria-pressed={accompliceId === s.id}
+                    className={`rounded-full border px-3 py-1.5 text-[13.5px] transition-colors ${
+                      accompliceId === s.id ? 'border-[var(--blood-bright)] bg-blood/15 text-[var(--text)]' : 'border-[var(--line)] text-[var(--text-dim)] hover:border-[var(--line-strong)]'
+                    }`}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          )}
 
           <div className="grid md:grid-cols-3 gap-6">
             <Choice legend={t('acc.why')} options={mystery.options.motives} value={motiveId} onChange={setMotiveId} />

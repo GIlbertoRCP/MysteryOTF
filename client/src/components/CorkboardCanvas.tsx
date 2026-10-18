@@ -1,6 +1,10 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Group, Rect, Text, Line, Circle, Path } from 'react-konva';
 import Konva from 'konva';
+import { isCoarsePointer, useIsPhone } from '../utils/device';
+
+// Lets a second finger start a pinch while the first is dragging.
+Konva.hitOnDragEnabled = true;
 import { StickyNote, ZoomIn, ZoomOut, Maximize, Search, Spline, Trash2, X, Link2 } from 'lucide-react';
 import { BoardCard, BoardStyle, CardKind, Mystery, Player, Role, Room, StatusTag, StringLabel } from '../types';
 import { useI18n, TKey } from '../i18n';
@@ -34,6 +38,10 @@ interface Props {
   onInspect: (card: BoardCard) => void;
   onCursor: (x: number, y: number) => void;
   onCopied: () => void;
+  /** Extra buttons for the bottom-left tool row */
+  extraTools?: React.ReactNode;
+  /** Dark board lit only around each player's cursor */
+  flashlight?: boolean;
 }
 
 const FONT_TYPE = 'Special Elite';
@@ -49,7 +57,7 @@ const TAG_STYLE: Record<StatusTag, { color: string }> = {
 export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref) => {
   const {
     room, mystery, me, partner, solo, boardStyle, partnerCursor, onMoveCard, onDropFile, onAddNote, onTag, onRemove,
-    onCreateString, onDeleteString, onInspect, onCursor, onCopied,
+    onCreateString, onDeleteString, onInspect, onCursor, onCopied, extraTools, flashlight,
   } = props;
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -70,6 +78,10 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
   const [noteDraft, setNoteDraft] = useState<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [fontsReady, setFontsReady] = useState(0);
+  const isPhone = useIsPhone();
+  const coarse = useMemo(() => isCoarsePointer(), []);
+  const pinch = useRef<{ dist: number; center: { x: number; y: number } } | null>(null);
+  const [light, setLight] = useState<{ x: number; y: number } | null>(null);
 
   const cards = room.cards;
   const cardList = useMemo(() => Object.values(cards), [cards]);
@@ -89,6 +101,52 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
     ro.observe(el);
     setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
+  }, []);
+
+  // Two-finger pinch zooms and pans. Native listeners so preventDefault works on every browser.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const read = (e: TouchEvent) => {
+      const rect = el.getBoundingClientRect();
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const ax = a.clientX - rect.left, ay = a.clientY - rect.top;
+      const bx = b.clientX - rect.left, by = b.clientY - rect.top;
+      return { center: { x: (ax + bx) / 2, y: (ay + by) / 2 }, dist: Math.hypot(ax - bx, ay - by) };
+    };
+    const onMove = (e: TouchEvent) => {
+      const stage = stageRef.current;
+      if (e.touches.length !== 2 || !stage) return;
+      e.preventDefault();
+      if (stage.isDragging()) stage.stopDrag();
+      const now = read(e);
+      const last = pinch.current;
+      pinch.current = now;
+      if (!last) return;
+      const oldScale = stage.scaleX();
+      const world = { x: (now.center.x - stage.x()) / oldScale, y: (now.center.y - stage.y()) / oldScale };
+      const next = Math.max(0.3, Math.min(2.2, oldScale * (now.dist / last.dist)));
+      const nextPos = {
+        x: now.center.x - world.x * next + (now.center.x - last.center.x),
+        y: now.center.y - world.y * next + (now.center.y - last.center.y),
+      };
+      // Move the stage right away for smoothness, then sync React state.
+      stage.scale({ x: next, y: next });
+      stage.position(nextPos);
+      setScale(next);
+      setPos(nextPos);
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinch.current = null;
+    };
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return () => {
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
   }, []);
 
   // ─── View helpers ───
@@ -336,10 +394,11 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
       }}
       onTap={(e) => {
         e.cancelBubble = true;
-        startConnect(id);
+        if (connectFrom && connectFrom !== id) handleCardClick(id);
+        else startConnect(id);
       }}
     >
-      <Circle radius={14} fill="transparent" />
+      <Circle radius={coarse ? 24 : 14} fill="transparent" />
       <Circle y={2} radius={7} fill="rgba(0,0,0,0.35)" />
       <Circle radius={active ? 9 : 7} fill="#c0392b" stroke="#7a1a12" strokeWidth={1} />
       <Circle x={-2} y={-2} radius={2.2} fill="rgba(255,255,255,0.65)" />
@@ -354,7 +413,12 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
       onDragOver={onDragOver}
       onDragLeave={() => setDropActive(false)}
       onDrop={onDrop}
-      style={{ cursor: connectFrom ? 'crosshair' : undefined }}
+      onPointerMove={(e) => {
+        if (!flashlight) return;
+        const rect = containerRef.current!.getBoundingClientRect();
+        setLight({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      }}
+      style={{ cursor: connectFrom ? 'crosshair' : undefined, touchAction: 'none' }}
     >
       <Stage
         ref={stageRef}
@@ -373,6 +437,15 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
         }}
         onWheel={handleWheel}
         onMouseMove={handleMouseMove}
+        onTouchMove={(e) => {
+          const touches = e.evt.touches;
+          const stage = stageRef.current;
+          if (!stage) return;
+          if (touches.length === 1 && connectFrom) {
+            const p = stage.getPointerPosition();
+            if (p) setPointer(toCanvas(p.x, p.y));
+          }
+        }}
         onClick={(e) => {
           if (e.target === stageRef.current) {
             setSelectedId(null);
@@ -506,6 +579,28 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
         )}
       </Stage>
 
+      {flashlight && (() => {
+        const me = light ?? { x: size.w / 2, y: size.h / 2 };
+        const holes = [`radial-gradient(circle 190px at ${me.x}px ${me.y}px, transparent 35%, black 100%)`];
+        if (partnerCursor && partner) {
+          holes.push(`radial-gradient(circle 150px at ${partnerCursor.x * scale + pos.x}px ${partnerCursor.y * scale + pos.y}px, transparent 30%, black 100%)`);
+        }
+        const mask = holes.join(', ');
+        return (
+          <div
+            className="pointer-events-none absolute inset-0 z-[6]"
+            aria-hidden
+            style={{
+              background: 'rgba(4,3,2,0.95)',
+              WebkitMaskImage: mask,
+              maskImage: mask,
+              WebkitMaskComposite: 'source-in',
+              maskComposite: 'intersect',
+            }}
+          />
+        );
+      })()}
+
       {/* Waiting for partner */}
       {!partner && !solo && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 sheet w-[min(560px,calc(100%-32px))] rounded-lg panel shadow-2xl px-4 py-3 flex items-center gap-4">
@@ -549,8 +644,12 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
       {/* Toolbar for the selected card */}
       {selectedCard && toolbarPos && !connectFrom && (
         <div
-          className="absolute z-20 -translate-x-1/2 -translate-y-full sheet flex items-center gap-0.5 rounded-lg panel shadow-2xl p-1"
-          style={{ left: Math.max(150, Math.min(size.w - 150, toolbarPos.x)), top: Math.max(56, toolbarPos.y) }}
+          className={
+            isPhone
+              ? 'absolute z-20 left-2 right-2 bottom-[72px] sheet flex items-center gap-0.5 overflow-x-auto rounded-lg panel shadow-2xl p-1'
+              : 'absolute z-20 -translate-x-1/2 -translate-y-full sheet flex items-center gap-0.5 rounded-lg panel shadow-2xl p-1'
+          }
+          style={isPhone ? undefined : { left: Math.max(150, Math.min(size.w - 150, toolbarPos.x)), top: Math.max(56, toolbarPos.y) }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           {selectedCard.kind !== 'note' && (
@@ -562,7 +661,7 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
             <button
               key={tag}
               onClick={() => onTag(selectedCard.id, selectedCard.statusTag === tag ? null : tag)}
-              className={`rounded-md px-2 py-1.5 text-[12.5px] font-semibold transition-colors ${
+              className={`shrink-0 whitespace-nowrap rounded-md px-2 py-2 sm:py-1.5 text-[12.5px] font-semibold transition-colors ${
                 selectedCard.statusTag === tag ? 'text-white' : 'text-[var(--text-dim)] hover:bg-white/5 hover:text-[var(--text)]'
               }`}
               style={selectedCard.statusTag === tag ? { background: TAG_STYLE[tag].color } : undefined}
@@ -590,7 +689,7 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
       {/* Empty-board hint */}
       {!evidenceOnBoard && (
         <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 font-marker text-[22px] text-paper/45 text-center px-4">
-          ← {t('board.empty')}
+          {isPhone ? t('board.emptyPhone') : `← ${t('board.empty')}`}
         </div>
       )}
 
@@ -625,6 +724,7 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
             </button>
           </form>
         )}
+        {extraTools}
         <div className="flex items-center rounded-lg panel shadow-lg">
           <button className="icon-btn hidden sm:inline-flex" onClick={() => zoomBy(1 / 1.2)} aria-label={t('board.zoomOut')} title={t('board.zoomOut')}>
             <ZoomOut size={16} />
@@ -655,7 +755,7 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
 const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }> = ({ icon, label, onClick, danger }) => (
   <button
     onClick={onClick}
-    className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] font-semibold transition-colors hover:bg-white/5 ${
+    className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 rounded-md px-2 py-2 sm:py-1.5 text-[12.5px] font-semibold transition-colors hover:bg-white/5 ${
       danger ? 'text-[var(--blood-bright)]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
     }`}
   >

@@ -251,7 +251,7 @@ class RoomManager {
   /** Points at a useful file the player hasn't put on the board yet. */
   botSuggestion(room: Room): { key: 'bot_look' | 'bot_lab_idle' | 'bot_tip'; ref?: string; index?: number } {
     const pinned = new Set(Object.values(room.cards).map(c => c.refId));
-    const order = ['autopsy', 'record', 'witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings', 'weapon', 'document'];
+    const order = ['autopsy', 'record', 'receipt', 'sighting', 'witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings', 'weapon', 'document'];
     const candidates = room.blueprint.evidence
       .filter(e => !pinned.has(e.id) && !this.isLabLocked(room, e.id))
       .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
@@ -378,9 +378,10 @@ class RoomManager {
       submission.weaponId === sol.weaponId,
       submission.alibiEvidenceId === sol.alibiEvidenceId,
     ];
+    if (sol.accompliceId) checks.push(submission.accompliceId === sol.accompliceId);
     const correctCount = checks.filter(Boolean).length;
     room.attemptsUsed += 1;
-    if (correctCount === 4) {
+    if (correctCount === checks.length) {
       room.status = 'solved';
       room.finishedAt = Date.now();
       room.score = computeScore(room.finishedAt - room.createdAt, room.attemptsUsed - 1, room.hintsUsed);
@@ -398,6 +399,7 @@ class RoomManager {
     return {
       by,
       correctCount,
+      total: room.blueprint.solution.accompliceId ? 5 : 4,
       status: room.status,
       attemptsUsed: room.attemptsUsed,
       maxAttempts: MAX_ATTEMPTS,

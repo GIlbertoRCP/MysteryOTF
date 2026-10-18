@@ -277,12 +277,27 @@ export const TEXT = {
   recordTitle: t('Alibi check: {place}', 'Verificación de coartada: {place}'),
   recordSummary: t('Who was really in {place}?', '¿Quién estuvo realmente en {place}?'),
   recordWithNames: t(
-    'Staff and guests in {place} between {window} confirm the presence of: {names}. Nobody else was seen there during that time.',
-    'El personal y los invitados en {place} entre {window} confirman la presencia de: {names}. Nadie más fue visto allí durante ese tiempo.'
+    'Staff and guests in {place} between {window} confirm the presence of: {names}. Nobody else could be confirmed there.',
+    'El personal y los invitados en {place} entre {window} confirman la presencia de: {names}. No se pudo confirmar a nadie más.'
   ),
   recordEmpty: t(
     'Nobody in {place} between {window} can confirm seeing any of the suspects there.',
     'Nadie en {place} entre {window} puede confirmar haber visto allí a ninguno de los sospechosos.'
+  ),
+
+  recordVouch: t(
+    ' {accomplice} and {killer} swear they were together there the whole time.',
+    ' {accomplice} y {killer} juran que estuvieron juntos allí todo el tiempo.'
+  ),
+  receiptTitle: t('Signed receipt: {place}', 'Recibo firmado: {place}'),
+  receiptSummary: t('Signed at {time}.', 'Firmado a las {time}.'),
+  receiptDetails: t(
+    'A receipt from {place}, signed by {name} at {time}. The staff there remember {name} clearly.',
+    'Un recibo de {place}, firmado por {name} a las {time}. El personal de allí recuerda a {name} con claridad.'
+  ),
+  aWhereTogether: t(
+    'In {place}, with {other}. We never left each other’s side. Ask them.',
+    'En {place}, con {other}. No nos separamos en ningún momento. Pregúnteselo.'
   ),
 
   diaryTitle: t("{victim}'s appointment book", 'Agenda de {victim}'),
@@ -294,7 +309,17 @@ export const TEXT = {
 
   autopsyTitle: t('Autopsy report: {victim}', 'Informe de autopsia: {victim}'),
   autopsySummary: t('Official cause and time of death.', 'Causa y hora oficiales de la muerte.'),
-  autopsyDetails: t('Time of death: between {window}. {cause}', 'Hora de la muerte: entre {window}. {cause}'),
+  autopsyDetails: t(
+    "Time of death: between {window}. The victim's watch broke in the fall and stopped at {tod}. {cause}",
+    'Hora de la muerte: entre {window}. El reloj de la víctima se rompió en la caída y se paró a las {tod}. {cause}'
+  ),
+
+  sightingTitle: t('Statement: {witness} saw {name}', 'Declaración: {witness} vio a {name}'),
+  sightingSummary: t('{name} in {place} at {time}.', '{name} en {place} a las {time}.'),
+  sightingDetails: t(
+    '{witness} spoke with {name} in {place} at {time} and remembers glancing at the clock. Check the floor plan for how far that is from {scene}.',
+    '{witness} habló con {name} en {place} a las {time} y recuerda haber mirado el reloj. Consulten en el plano a qué distancia está de {scene}.'
+  ),
 
   smudgeTitle: t("Partial prints on the victim's lapel", 'Huellas parciales en la solapa de la víctima'),
   smudgeSummary: t('Someone grabbed the victim.', 'Alguien agarró a la víctima.'),
@@ -367,6 +392,11 @@ export const TEXT = {
   hintClue: t('“{title}” rules out {names}.', '«{title}» descarta a {names}.'),
   hintSlip: t('Ask the remaining suspects how they heard about the death. Listen for details nobody should know yet.', 'Pregunten a los sospechosos restantes cómo se enteraron de la muerte. Atentos a detalles que nadie debería conocer aún.'),
   hintMotive: t('Once you know who did it, look for the document that names them. That is the motive.', 'Cuando sepan quién fue, busquen el documento que lo nombra. Ese es el móvil.'),
+
+  explanationAccomplice: t(
+    ' {accomplice} lied to give them an alibi, but a receipt put {accomplice} in {receiptPlace} at the time.',
+    ' {accomplice} mintió para darle una coartada, pero un recibo situaba a {accomplice} en {receiptPlace} a esa hora.'
+  ),
 
   explanation: t(
     '{killer} killed {victim} with {weapon}. Motive: {motive}. They claimed to be in {place}, but nobody there could vouch for them.',

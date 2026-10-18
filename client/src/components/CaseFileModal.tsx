@@ -157,7 +157,7 @@ export const CaseFileModal: React.FC<Props> = ({ mystery, onClose }) => {
           {tab === 'rules' && (
             <div className="p-5 sm:p-8 max-w-[70ch]">
               <ul className="space-y-4 text-[15.5px] leading-relaxed text-[var(--text-dim)]">
-                {(['file.rule1', 'file.rule2', 'file.rule3', 'file.rule4', 'file.rule5'] as TKey[]).map(k => (
+                {(['file.rule1', 'file.rule2', 'file.rule6', 'file.rule3', 'file.rule4', 'file.rule5'] as TKey[]).map(k => (
                   <li key={k} className="flex gap-3">
                     <span className="mt-[10px] h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--blood-bright)]" />
                     <span>{t(k)}</span>

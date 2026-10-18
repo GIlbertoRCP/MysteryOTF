@@ -7,6 +7,14 @@ A co-op murder mystery played on a shared corkboard. One player is the **Lead De
 - **Today's case.** Everyone gets the same case each day. Copy your result to share it.
 - **Hints and score.** Four hints per case, each more specific. Hints, wrong accusations and time cost points.
 - **Tutorial.** A short guided case for first-timers.
+- **Nine settings.** A gothic manor, a cyberpunk tower, an opera house, a 1950s casino, a snowbound express, a Day of the Dead hacienda, a Hollywood studio, an Arctic research station and a Venetian masquerade.
+- **Accomplices.** On Mastermind, about half the cases have a second suspect who lies to cover for the killer. Name them too.
+- **Floor plan.** Every case has a blueprint of its location (press P), with a 3D view you can orbit. It shows where the body and items were found, who claims each room, and walking times. On Detective and Mastermind, one suspect is cleared by distance: seen too far from the scene to have reached it in time.
+- **Hands-on clues.** Match the shoeprint, fit the hand to the prints, sweep a UV lamp, type the blood, piece together torn letters and decode the diary. A "Just show me" link skips any puzzle.
+- **3D evidence.** Recovered items can be turned over in 3D. Under the lab lamp, the one that was wiped "but not well" gives itself away.
+- **Timeline.** Pinned clues with a time land on a shared timeline, and anything that breaks an alibi glows red.
+- **Atmosphere.** Flashlight mode, weather for each setting, and a camera push-in when the verdict lands.
+- **Phones and tablets.** Pinch to zoom the board, files open as a bottom sheet, and the card toolbar docks where your thumb can reach.
 
 ## Run it locally
 
@@ -39,7 +47,7 @@ Things to know about the free plan:
 
 `server/src/mysteryEngine.ts` builds each case from a seed, so the same seed, setting and difficulty always produce the same case. It keeps rerolling until the clues point to exactly one suspect *and* neither player's half of the evidence is enough on its own. The solution never leaves the server.
 
-Content lives in `server/src/content/` (shared clue text in `common.ts`, the six settings in `themes.ts`), with every string in English and Spanish. UI text is in `client/src/i18n.tsx`.
+Content lives in `server/src/content/` (shared clue text in `common.ts`, the nine settings in `themes.ts`), with every string in English and Spanish. UI text is in `client/src/i18n.tsx`.
 
 Check the generator after changing content:
 

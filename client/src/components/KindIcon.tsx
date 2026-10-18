@@ -1,5 +1,5 @@
 import React from 'react';
-import { LucideIcon, Eye, Camera, ClipboardCheck, FileText, BookOpen, Stethoscope, Fingerprint, Footprints, Microscope, Package, Phone, TestTube } from 'lucide-react';
+import { LucideIcon, Eye, Camera, ClipboardCheck, FileText, BookOpen, Stethoscope, Fingerprint, Footprints, Microscope, Package, Phone, TestTube, Receipt, Clock } from 'lucide-react';
 import { EvidenceKind } from '../types';
 
 const ICONS: Record<EvidenceKind, LucideIcon> = {
@@ -14,6 +14,8 @@ const ICONS: Record<EvidenceKind, LucideIcon> = {
   trace: Microscope,
   phone: Phone,
   scrapings: TestTube,
+  receipt: Receipt,
+  sighting: Clock,
   weapon: Package,
 };
 
@@ -22,4 +24,4 @@ export const KindIcon: React.FC<{ kind: EvidenceKind; size?: number; className?:
   return <Icon size={size} className={className} strokeWidth={1.75} />;
 };
 
-export const KIND_ORDER: EvidenceKind[] = ['diary', 'autopsy', 'witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings', 'record', 'document', 'weapon'];
+export const KIND_ORDER: EvidenceKind[] = ['diary', 'autopsy', 'witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings', 'record', 'sighting', 'receipt', 'document', 'weapon'];

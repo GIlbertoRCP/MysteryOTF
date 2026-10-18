@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Lightbulb, BookOpen, MessagesSquare, Gavel, Link2, Check, Settings2, LayoutGrid, Camera, Volume2, VolumeX, LogOut, Clock } from 'lucide-react';
+import { Flashlight, CloudRain, Map as MapIcon, Lightbulb, BookOpen, MessagesSquare, Gavel, Link2, Check, Settings2, LayoutGrid, Camera, Volume2, VolumeX, LogOut, Clock } from 'lucide-react';
 import { BoardStyle, Lang, Mystery, Player, Room } from '../types';
 import { useI18n, TKey } from '../i18n';
 import { ROLE_COLORS } from '../cardInfo';
@@ -16,6 +16,11 @@ interface HeaderBarProps {
   onOpenInterrogation: () => void;
   onOpenAccusation: () => void;
   onOpenHints: () => void;
+  onOpenPlan: () => void;
+  flashlight: boolean;
+  onFlashlight: (on: boolean) => void;
+  weather: boolean;
+  onWeather: (on: boolean) => void;
   onTidy: () => void;
   onExport: () => void;
   onLeave: () => void;
@@ -39,7 +44,7 @@ export function useElapsed(since: number, frozen: boolean) {
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
-  room, mystery, me, boardStyle, onBoardStyle, onOpenCaseFile, onOpenInterrogation, onOpenAccusation, onOpenHints, onTidy, onExport, onLeave, onCopied,
+  room, mystery, me, boardStyle, onBoardStyle, onOpenCaseFile, onOpenInterrogation, onOpenAccusation, onOpenHints, onOpenPlan, flashlight, onFlashlight, weather, onWeather, onTidy, onExport, onLeave, onCopied,
 }) => {
   const { t, lang, setLang } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -97,6 +102,9 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       <nav className="flex items-center gap-1">
         <button onClick={onOpenCaseFile} className="btn btn-ghost border-transparent px-2 md:px-3.5" aria-keyshortcuts="C" aria-label={t('header.caseFile')}>
           <BookOpen size={16} /> <span className="hidden md:inline">{t('header.caseFile')}</span>
+        </button>
+        <button onClick={onOpenPlan} className="btn btn-ghost border-transparent px-2 md:px-3.5" aria-keyshortcuts="P" aria-label={t('header.plan')}>
+          <MapIcon size={16} /> <span className="hidden lg:inline">{t('header.plan')}</span>
         </button>
         <button onClick={onOpenInterrogation} className="btn btn-ghost border-transparent px-2 md:px-3.5" aria-keyshortcuts="I" aria-label={t('header.interrogate')}>
           <MessagesSquare size={16} /> <span className="hidden md:inline">{t('header.interrogate')}</span>
@@ -175,6 +183,16 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                 ))}
               </div>
               <div className="border-t border-[var(--line)] my-1" />
+              <MenuItem
+                icon={<Flashlight size={15} />}
+                label={`${t('header.flashlight')}: ${flashlight ? t('common.on') : t('common.off')}`}
+                onClick={() => onFlashlight(!flashlight)}
+              />
+              <MenuItem
+                icon={<CloudRain size={15} />}
+                label={`${t('header.weather')}: ${weather ? t('common.on') : t('common.off')}`}
+                onClick={() => onWeather(!weather)}
+              />
               <MenuItem icon={<LayoutGrid size={15} />} label={t('header.tidy')} hint="T" onClick={() => { onTidy(); setMenuOpen(false); }} />
               <MenuItem icon={<Camera size={15} />} label={t('header.export')} onClick={() => { onExport(); setMenuOpen(false); }} />
               <MenuItem

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { LucideIcon, Castle, Cpu, Drama, Dice5, TrainFront, Flower2, FileSearch, UserRound, ChevronDown, RotateCcw, ArrowRight, Loader2, CalendarDays, GraduationCap, Check } from 'lucide-react';
+import { LucideIcon, Castle, Cpu, Drama, Dice5, TrainFront, Flower2, FileSearch, UserRound, ChevronDown, RotateCcw, ArrowRight, Loader2, CalendarDays, GraduationCap, Check, Clapperboard, Snowflake, VenetianMask } from 'lucide-react';
 import { Difficulty, GameMode, Lang, Role, ThemeKey } from '../types';
 import { useI18n, TKey } from '../i18n';
 import { todayKey, type CreateCaseOptions } from '../App';
@@ -20,12 +20,15 @@ const THEMES: { key: ThemeKey; Icon: LucideIcon }[] = [
   { key: 'casino', Icon: Dice5 },
   { key: 'hacienda', Icon: Flower2 },
   { key: 'cyber', Icon: Cpu },
+  { key: 'studio', Icon: Clapperboard },
+  { key: 'arctic', Icon: Snowflake },
+  { key: 'carnival', Icon: VenetianMask },
 ];
 
 const DIFFICULTIES: Difficulty[] = ['Novice', 'Detective', 'Mastermind'];
 
 // Must match dailyCase() and the theme order on the server.
-const SERVER_THEME_ORDER: ThemeKey[] = ['gothic', 'cyber', 'opera', 'casino', 'express', 'hacienda'];
+const SERVER_THEME_ORDER: ThemeKey[] = ['gothic', 'cyber', 'opera', 'casino', 'express', 'hacienda', 'studio', 'arctic', 'carnival'];
 function dailyTheme(date: string): ThemeKey {
   let h = 0;
   for (const ch of date) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
