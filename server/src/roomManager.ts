@@ -1,8 +1,12 @@
 import {
   BOT_PHRASES, GameMode, LabState, CHAT_PHRASES, AccusationResult, AccusationSubmission, BoardCard, BoardString, CaseStatus, ChatMessage, Difficulty, Lang,
-  Player, PublicMystery, PublicRoom, Role, StatusTag, StringLabel, ThemeKey,
+  ConfrontEntry, Player, PublicMystery, PublicRoom, Role, SearchEntry, StatusTag, StringLabel, ThemeKey,
 } from './types.js';
-import { Blueprint, buildBlueprint, dailyCase, explainSolution, hintsFor, localize, randomSeed, THEME_KEYS } from './mysteryEngine.js';
+import { Blueprint, buildBlueprint, confront, dailyCase, explainSolution, hintsFor, localize, randomSeed, searchSpot, storyFor, THEME_KEYS } from './mysteryEngine.js';
+import { createStore, RoomStore } from './store.js';
+
+/** How long a disconnected player's seat is held before they count as gone. */
+export const GRACE_MS = 30 * 1000;
 
 const MAX_ATTEMPTS = 3;
 const MAX_CHAT = 200;
@@ -13,13 +17,17 @@ const MAX_HINTS = 4;
 export const LAB_KINDS = ['autopsy', 'weapon', 'smudge', 'shoeprint', 'trace', 'scrapings'];
 const LAB_SECONDS: Record<Difficulty, number> = { Novice: 10, Detective: 18, Mastermind: 28 };
 
-export function computeScore(elapsedMs: number, wrongAttempts: number, hintsUsed: number): number {
+/** A held-back clue arrives this long after the case opens (tests shorten it with LATE_LEAD_SECONDS). */
+export const LATE_LEAD_MS = Number(process.env.LATE_LEAD_SECONDS ?? 300) * 1000;
+const CONFRONT_PENALTY = 50;
+
+export function computeScore(elapsedMs: number, wrongAttempts: number, hintsUsed: number, wastedConfronts = 0): number {
   const overtime = Math.max(0, elapsedMs / 1000 - 300); // the first five minutes are free
-  const raw = 1000 - wrongAttempts * 200 - hintsUsed * 100 - Math.floor(overtime / 10) * 2;
+  const raw = 1000 - wrongAttempts * 200 - hintsUsed * 100 - wastedConfronts * CONFRONT_PENALTY - Math.floor(overtime / 10) * 2;
   return Math.max(50, Math.round(raw));
 }
 
-interface Room {
+export interface Room {
   code: string;
   blueprint: Blueprint;
   mysteries: Partial<Record<Lang, PublicMystery>>;
@@ -37,10 +45,16 @@ interface Room {
   daily: string | null;
   lab: LabState | null;
   labTimer?: ReturnType<typeof setTimeout>;
+  saveTimer?: ReturnType<typeof setTimeout>;
   hintsUsed: number;
   score: number | null;
   finishedAt: number | null;
   nudges: number;
+  confrontations: Omit<ConfrontEntry, 'line' | 'followUp'>[];
+  wastedConfronts: number;
+  lateReleased: boolean;
+  searches: Omit<SearchEntry, 'text' | 'found'>[];
+  foundItems: string[];
 }
 
 export interface CreateOptions {
@@ -58,19 +72,86 @@ const clampNum = (n: unknown, min: number, max: number) =>
   typeof n === 'number' && Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : 0;
 const cleanText = (s: unknown, max: number) => (typeof s === 'string' ? s.trim().slice(0, max) : '');
 
+// Fields that only make sense in this process and are never saved.
+const TRANSIENT = new Set(['mysteries', 'labTimer', 'saveTimer']);
+
 class RoomManager {
   private rooms: Record<string, Room> = {};
+  private store: RoomStore = createStore();
+  private graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  private newCode(): string {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    do {
-      code = Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
-    } while (this.rooms[code]);
-    return code;
+  /** Called when a lab test finishes, including one that finishes after a restart. */
+  onLabDone: (room: Room) => void = () => {};
+  /** Called when a disconnected player's seat is finally given up. */
+  onPlayerGone: (room: Room, player: Player) => void = () => {};
+
+  get durable() {
+    return this.store.durable;
   }
 
-  createRoom(opts: CreateOptions): Room {
+  private async newCode(): Promise<string> {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (;;) {
+      const code = Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+      if (!this.rooms[code] && !(await this.store.exists(code))) return code;
+    }
+  }
+
+  // ─── Saving and loading ───
+
+  /** Saves the room shortly after it changes; bursts of changes become one write. */
+  persist(room: Room) {
+    if (!this.store.durable || room.saveTimer) return;
+    room.saveTimer = setTimeout(() => {
+      room.saveTimer = undefined;
+      void this.store.save(room.code, this.serialize(room));
+    }, 400);
+  }
+
+  private serialize(room: Room): string {
+    return JSON.stringify(room, (k, v) => (TRANSIENT.has(k) ? undefined : v));
+  }
+
+  /** Finds a room in memory, or brings a saved one back after a restart. */
+  async loadRoom(code: string): Promise<Room | undefined> {
+    const upper = (code || '').toUpperCase();
+    if (this.rooms[upper]) return this.rooms[upper];
+    const json = await this.store.load(upper);
+    if (!json || this.rooms[upper]) return this.rooms[upper];
+    const room = JSON.parse(json) as Room;
+    room.mysteries = {};
+    // Cases saved before these features existed
+    room.confrontations ??= [];
+    room.wastedConfronts ??= 0;
+    room.lateReleased ??= !room.blueprint.lateEvidenceId;
+    room.searches ??= [];
+    room.foundItems ??= [];
+    // Everyone was disconnected by the restart. Hold their seats so they can come straight back.
+    for (const p of Object.values(room.players)) {
+      p.connected = false;
+      this.holdSeat(room, p);
+    }
+    this.rooms[upper] = room;
+    this.resumeLab(room);
+    console.log(`[Room] Restored ${upper} from storage`);
+    return room;
+  }
+
+  private resumeLab(room: Room) {
+    const running = room.lab?.running;
+    if (!running || room.status !== 'active') return;
+    room.labTimer = setTimeout(() => this.finishLab(room), Math.max(0, running.readyAt - Date.now()));
+  }
+
+  private finishLab(room: Room) {
+    if (!room.lab?.running) return;
+    room.lab.unlocked.push(room.lab.running.id);
+    room.lab.running = null;
+    this.persist(room);
+    this.onLabDone(room);
+  }
+
+  async createRoom(opts: CreateOptions): Promise<Room> {
     let theme = opts.theme && THEME_KEYS.includes(opts.theme) ? opts.theme : 'gothic';
     let difficulty: Difficulty = opts.difficulty && ['Novice', 'Detective', 'Mastermind'].includes(opts.difficulty) ? opts.difficulty : 'Detective';
     let seed = cleanText(opts.seed, 40).toUpperCase() || randomSeed();
@@ -86,7 +167,7 @@ class RoomManager {
     const blueprint = buildBlueprint(difficulty, theme, seed);
 
     const room: Room = {
-      code: this.newCode(),
+      code: await this.newCode(),
       blueprint,
       mysteries: {},
       players: {},
@@ -106,6 +187,11 @@ class RoomManager {
       score: null,
       finishedAt: null,
       nudges: 0,
+      confrontations: [],
+      wastedConfronts: 0,
+      lateReleased: false,
+      searches: [],
+      foundItems: [],
     };
 
     // Suspects start pinned in a row under the four case questions.
@@ -123,6 +209,7 @@ class RoomManager {
     });
 
     this.rooms[room.code] = room;
+    this.persist(room);
     return room;
   }
 
@@ -130,17 +217,111 @@ class RoomManager {
     return this.rooms[(code || '').toUpperCase()];
   }
 
+  /** Assistant nudge counter, saved like everything else. */
+  nudge(room: Room) {
+    room.nudges += 1;
+    room.lastActiveAt = Date.now();
+    this.persist(room);
+  }
+
+  /** The case as this player may see it right now (a held-back clue stays hidden until it arrives). */
   getMystery(room: Room, lang: Lang): PublicMystery {
     if (!room.mysteries[lang]) room.mysteries[lang] = localize(room.blueprint, lang);
-    return room.mysteries[lang]!;
+    const full = room.mysteries[lang]!;
+    const late = room.blueprint.lateEvidenceId;
+    if (!late || room.lateReleased) return full;
+    return { ...full, evidence: full.evidence.filter(e => e.id !== late) };
   }
 
-  /** Solo cases have room for exactly one detective. */
-  isFull(room: Room): boolean {
-    return room.mode === 'solo' && Object.keys(room.players).length >= 1;
+  /** Rooms whose held-back clue is due. */
+  dueLateLeads(): Room[] {
+    const now = Date.now();
+    return Object.values(this.rooms).filter(r =>
+      r.blueprint.lateEvidenceId && !r.lateReleased && r.status === 'active' &&
+      Object.values(r.players).some(p => p.connected) && now - r.createdAt > LATE_LEAD_MS);
   }
 
-  addPlayer(room: Room, socketId: string, name: string, wantedRole: Role, lang: Lang): Player {
+  releaseLateLead(room: Room) {
+    room.lateReleased = true;
+    this.persist(room);
+  }
+
+  // ─── Confrontations ───
+
+  /** Presents a pinned clue to a suspect. Returns null if it isn't allowed. */
+  confront(room: Room, suspectId: string, evidenceId: string, by: string): { entry: Omit<ConfrontEntry, 'line' | 'followUp'>; repeat: boolean } | null {
+    if (room.status !== 'active') return null;
+    if (!room.cards[`card-${evidenceId}`]) return null; // only clues on the shared board
+    const previous = room.confrontations.find(c => c.suspectId === suspectId && c.evidenceId === evidenceId);
+    if (previous) return { entry: previous, repeat: true };
+    const outcome = confront(room.blueprint, suspectId, evidenceId, 'en');
+    if (!outcome) return null;
+    const entry = { suspectId, evidenceId, by: cleanText(by, 24), kind: outcome.kind, cracked: outcome.cracked, at: Date.now() };
+    room.confrontations.push(entry);
+    if (!outcome.cracked) room.wastedConfronts += 1;
+    room.lastActiveAt = Date.now();
+    this.persist(room);
+    return { entry, repeat: false };
+  }
+
+  /** The confrontation log with each reaction in the reader's language. */
+  confrontationsFor(room: Room, lang: Lang): ConfrontEntry[] {
+    return room.confrontations.map(c => this.localizeConfront(room, c, lang));
+  }
+
+  localizeConfront(room: Room, entry: Omit<ConfrontEntry, 'line' | 'followUp'>, lang: Lang): ConfrontEntry {
+    const outcome = confront(room.blueprint, entry.suspectId, entry.evidenceId, lang)!;
+    return { ...entry, line: outcome.line, followUp: outcome.followUp };
+  }
+
+  // ─── Searching the scene ───
+
+  /** Recovered items stay hidden until someone searches the spot they were left in. */
+  isHidden(room: Room, evidenceId: string): boolean {
+    const ev = room.blueprint.evidence.find(e => e.id === evidenceId);
+    return !!ev && ev.kind === 'weapon' && !room.foundItems.includes(evidenceId);
+  }
+
+  search(room: Room, spotId: string, by: string): { entry: Omit<SearchEntry, 'text' | 'found'>; repeat: boolean } | null {
+    if (room.status !== 'active') return null;
+    const previous = room.searches.find(s => s.spotId === spotId);
+    if (previous) return { entry: previous, repeat: true };
+    const result = searchSpot(room.blueprint, spotId, 'en');
+    if (!result) return null;
+    const entry = { spotId, by: cleanText(by, 24), at: Date.now() };
+    room.searches.push(entry);
+    for (const id of result.found) if (!room.foundItems.includes(id)) room.foundItems.push(id);
+    room.lastActiveAt = Date.now();
+    this.persist(room);
+    return { entry, repeat: false };
+  }
+
+  localizeSearch(room: Room, entry: Omit<SearchEntry, 'text' | 'found'>, lang: Lang): SearchEntry {
+    const result = searchSpot(room.blueprint, entry.spotId, lang)!;
+    return { ...entry, text: result.text, found: result.found };
+  }
+
+  searchesFor(room: Room, lang: Lang): SearchEntry[] {
+    return room.searches.map(s => this.localizeSearch(room, s, lang));
+  }
+
+  /** Solo cases have room for exactly one detective (who may be coming back). */
+  isFull(room: Room, playerId: string): boolean {
+    return room.mode === 'solo' && Object.keys(room.players).some(id => id !== playerId);
+  }
+
+  /** Adds a player, or gives a returning player their seat back. */
+  addPlayer(room: Room, playerId: string, socketId: string, name: string, wantedRole: Role, lang: Lang): { player: Player; rejoined: boolean } {
+    const existing = room.players[playerId];
+    if (existing) {
+      this.clearGrace(room, playerId);
+      existing.socketId = socketId;
+      existing.connected = true;
+      existing.lang = lang === 'es' ? 'es' : 'en';
+      room.lastActiveAt = Date.now();
+      this.persist(room);
+      return { player: existing, rejoined: true };
+    }
     if (room.mode === 'solo') wantedRole = 'lead';
     const taken = Object.values(room.players).map(p => p.role);
     let role: Role = wantedRole === 'analyst' ? 'analyst' : 'lead';
@@ -149,30 +330,72 @@ class RoomManager {
       if (!taken.includes(other)) role = other;
     }
     const player: Player = {
+      id: playerId,
       socketId,
       name: cleanText(name, 24) || (role === 'lead' ? 'Detective' : 'Analyst'),
       role,
       lang: lang === 'es' ? 'es' : 'en',
+      connected: true,
     };
-    room.players[socketId] = player;
+    room.players[playerId] = player;
     room.lastActiveAt = Date.now();
-    return player;
+    this.persist(room);
+    return { player, rejoined: false };
   }
 
-  setLang(room: Room, socketId: string, lang: Lang) {
-    const p = room.players[socketId];
+  setLang(room: Room, playerId: string, lang: Lang) {
+    const p = room.players[playerId];
     if (p) p.lang = lang === 'es' ? 'es' : 'en';
+    this.persist(room);
   }
 
-  removePlayer(socketId: string): Room | null {
-    for (const room of Object.values(this.rooms)) {
-      if (room.players[socketId]) {
-        delete room.players[socketId];
+  private graceKey(room: Room, playerId: string) {
+    return `${room.code}:${playerId}`;
+  }
+
+  private clearGrace(room: Room, playerId: string) {
+    const k = this.graceKey(room, playerId);
+    const timer = this.graceTimers.get(k);
+    if (timer) clearTimeout(timer);
+    this.graceTimers.delete(k);
+  }
+
+  private holdSeat(room: Room, player: Player) {
+    this.clearGrace(room, player.id);
+    this.graceTimers.set(
+      this.graceKey(room, player.id),
+      setTimeout(() => {
+        this.graceTimers.delete(this.graceKey(room, player.id));
+        if (room.players[player.id]?.connected) return;
+        delete room.players[player.id];
         room.lastActiveAt = Date.now();
-        return room;
-      }
-    }
-    return null;
+        this.persist(room);
+        this.onPlayerGone(room, player);
+      }, GRACE_MS)
+    );
+  }
+
+  /** A connection dropped: keep the seat for a while in case they come right back. */
+  disconnect(roomCode: string | undefined, playerId: string | undefined, socketId: string): Room | null {
+    const room = roomCode ? this.rooms[roomCode] : undefined;
+    const player = room && playerId ? room.players[playerId] : undefined;
+    if (!room || !player || player.socketId !== socketId) return null;
+    player.connected = false;
+    room.lastActiveAt = Date.now();
+    this.persist(room);
+    this.holdSeat(room, player);
+    return room;
+  }
+
+  /** The player chose to leave: give the seat up straight away. */
+  leave(roomCode: string | undefined, playerId: string | undefined): Room | null {
+    const room = roomCode ? this.rooms[roomCode] : undefined;
+    if (!room || !playerId || !room.players[playerId]) return null;
+    this.clearGrace(room, playerId);
+    delete room.players[playerId];
+    room.lastActiveAt = Date.now();
+    this.persist(room);
+    return room;
   }
 
   toPublic(room: Room): PublicRoom {
@@ -195,6 +418,7 @@ class RoomManager {
       maxHints: MAX_HINTS,
       score: room.score,
       finishedAt: room.finishedAt,
+      wastedConfronts: room.wastedConfronts,
     };
   }
 
@@ -206,18 +430,14 @@ class RoomManager {
     return !!ev && ev.role === 'analyst' && LAB_KINDS.includes(ev.kind) && !room.lab.unlocked.includes(evidenceId);
   }
 
-  /** Starts a lab test. Calls onDone when the result is ready. */
-  requestLab(room: Room, evidenceId: string, onDone: () => void): boolean {
+  /** Starts a lab test; onLabDone fires when the result is ready. */
+  requestLab(room: Room, evidenceId: string): boolean {
     if (!room.lab || room.lab.running || room.status !== 'active') return false;
     if (!this.isLabLocked(room, evidenceId)) return false;
     const seconds = room.tutorial ? 6 : LAB_SECONDS[room.blueprint.difficulty];
     room.lab.running = { id: evidenceId, readyAt: Date.now() + seconds * 1000 };
-    room.labTimer = setTimeout(() => {
-      if (!room.lab?.running) return;
-      room.lab.unlocked.push(room.lab.running.id);
-      room.lab.running = null;
-      onDone();
-    }, seconds * 1000);
+    room.labTimer = setTimeout(() => this.finishLab(room), seconds * 1000);
+    this.persist(room);
     return true;
   }
 
@@ -226,6 +446,7 @@ class RoomManager {
   revealHint(room: Room): boolean {
     if (room.hintsUsed >= MAX_HINTS || room.status !== 'active') return false;
     room.hintsUsed += 1;
+    this.persist(room);
     return true;
   }
 
@@ -245,15 +466,16 @@ class RoomManager {
       at: Date.now(),
     };
     room.chat.push(msg);
+    this.persist(room);
     return msg;
   }
 
   /** Points at a useful file the player hasn't put on the board yet. */
   botSuggestion(room: Room): { key: 'bot_look' | 'bot_lab_idle' | 'bot_tip'; ref?: string; index?: number } {
     const pinned = new Set(Object.values(room.cards).map(c => c.refId));
-    const order = ['autopsy', 'record', 'receipt', 'sighting', 'witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings', 'weapon', 'document'];
+    const order = ['autopsy', 'record', 'receipt', 'sighting', 'claim', 'planted', 'witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings', 'weapon', 'document'];
     const candidates = room.blueprint.evidence
-      .filter(e => !pinned.has(e.id) && !this.isLabLocked(room, e.id))
+      .filter(e => !pinned.has(e.id) && !this.isLabLocked(room, e.id) && !this.isHidden(room, e.id))
       .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
     if (candidates.length) return { key: 'bot_look', ref: candidates[0].id };
     const locked = room.blueprint.evidence.find(e => this.isLabLocked(room, e.id));
@@ -265,11 +487,12 @@ class RoomManager {
   idleAssistantRooms(idleMs: number): Room[] {
     const now = Date.now();
     return Object.values(this.rooms).filter(r =>
-      r.assistant && r.status === 'active' && Object.keys(r.players).length > 0 && r.nudges < 4 && now - r.lastActiveAt > idleMs);
+      r.assistant && r.status === 'active' && Object.values(r.players).some(p => p.connected) && r.nudges < 4 && now - r.lastActiveAt > idleMs);
   }
 
   touch(room: Room) {
     room.lastActiveAt = Date.now();
+    this.persist(room);
   }
 
   // ─── Board ───
@@ -279,7 +502,7 @@ class RoomManager {
     if (kind !== 'evidence' && kind !== 'note' && kind !== 'suspect') return null;
     const refId = cleanText(raw.refId, 40);
     if (kind === 'evidence' && !room.blueprint.evidence.some(e => e.id === refId)) return null;
-    if (kind === 'evidence' && this.isLabLocked(room, refId)) return null;
+    if (kind === 'evidence' && (this.isLabLocked(room, refId) || this.isHidden(room, refId))) return null;
     if (kind === 'suspect' && !room.blueprint.suspects.some(s => s.id === refId)) return null;
     const id = kind === 'note' ? `note-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}` : `card-${refId}`;
     if (room.cards[id]) return null;
@@ -297,6 +520,7 @@ class RoomManager {
     if (kind === 'note' && !card.text) return null;
     room.cards[id] = card;
     room.lastActiveAt = Date.now();
+    this.persist(room);
     return card;
   }
 
@@ -305,6 +529,7 @@ class RoomManager {
     if (!card) return false;
     card.x = clampNum(x, -4000, 6000);
     card.y = clampNum(y, -4000, 6000);
+    this.persist(room);
     return true;
   }
 
@@ -312,6 +537,7 @@ class RoomManager {
     const card = room.cards[cardId];
     if (!card) return false;
     card.statusTag = tag && STATUS_TAGS.includes(tag) ? tag : undefined;
+    this.persist(room);
     return true;
   }
 
@@ -322,6 +548,7 @@ class RoomManager {
       .filter(s => s.fromCardId === cardId || s.toCardId === cardId)
       .map(s => s.id);
     removedStrings.forEach(id => delete room.strings[id]);
+    this.persist(room);
     return removedStrings;
   }
 
@@ -339,12 +566,14 @@ class RoomManager {
       createdBy,
     };
     room.strings[id] = str;
+    this.persist(room);
     return str;
   }
 
   deleteString(room: Room, id: string): boolean {
     if (!room.strings[id]) return false;
     delete room.strings[id];
+    this.persist(room);
     return true;
   }
 
@@ -364,6 +593,7 @@ class RoomManager {
     };
     room.chat.push(msg);
     if (room.chat.length > MAX_CHAT) room.chat.splice(0, room.chat.length - MAX_CHAT);
+    this.persist(room);
     return msg;
   }
 
@@ -384,17 +614,18 @@ class RoomManager {
     if (correctCount === checks.length) {
       room.status = 'solved';
       room.finishedAt = Date.now();
-      room.score = computeScore(room.finishedAt - room.createdAt, room.attemptsUsed - 1, room.hintsUsed);
+      room.score = computeScore(room.finishedAt - room.createdAt, room.attemptsUsed - 1, room.hintsUsed, room.wastedConfronts);
     } else if (room.attemptsUsed >= MAX_ATTEMPTS) {
       room.status = 'failed';
       room.finishedAt = Date.now();
       room.score = 0;
     }
     if (room.status !== 'active' && room.labTimer) clearTimeout(room.labTimer);
+    this.persist(room);
     return { correctCount };
   }
 
-  resultFor(room: Room, by: string, correctCount: number, lang: Lang): AccusationResult {
+  resultFor(room: Room, by: string, correctCount: number, lang: Lang, submission?: AccusationSubmission): AccusationResult {
     const done = room.status !== 'active';
     return {
       by,
@@ -408,14 +639,27 @@ class RoomManager {
       score: room.score ?? undefined,
       elapsedMs: room.finishedAt ? room.finishedAt - room.createdAt : undefined,
       hintsUsed: room.hintsUsed,
+      story: done ? storyFor(room.blueprint, lang) : undefined,
+      wastedConfronts: room.wastedConfronts,
+      spotsSearched: room.searches.length,
+      submission,
+      framedIds: done ? this.framedIds(room.blueprint) : undefined,
     };
   }
 
-  /** Drop rooms nobody has touched for a while. */
+  private framedIds(bp: Blueprint): string[] {
+    const idx = new Set<number>();
+    if (bp.planted) idx.add(bp.planted.suspectIdx);
+    const f = bp.suspects[bp.killerIdx].frameTargetIdx;
+    if (f !== undefined) idx.add(f);
+    return [...idx].map(i => bp.suspects[i].id);
+  }
+
+  /** Drops idle rooms from memory. Saved rooms stay in storage until they expire. */
   sweep(maxIdleMs: number) {
     const now = Date.now();
     for (const [code, room] of Object.entries(this.rooms)) {
-      if (Object.keys(room.players).length === 0 && now - room.lastActiveAt > maxIdleMs) {
+      if (!Object.values(room.players).some(p => p.connected) && now - room.lastActiveAt > maxIdleMs) {
         if (room.labTimer) clearTimeout(room.labTimer);
         delete this.rooms[code];
       }

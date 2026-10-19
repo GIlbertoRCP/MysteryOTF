@@ -28,9 +28,9 @@ interface Particle {
 const COUNT: Record<Kind, number> = { rain: 140, neon: 110, snow: 110, petals: 40, dust: 60, glitter: 70 };
 
 /** Light, per-setting weather drawn over the board. Purely decorative and never blocks the pointer. */
-export const WeatherLayer: React.FC<{ theme: ThemeKey }> = ({ theme }) => {
+export const WeatherLayer: React.FC<{ theme: ThemeKey; storm?: boolean }> = ({ theme, storm }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const kind = BY_THEME[theme];
+  const kind: Kind = storm ? 'rain' : BY_THEME[theme];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -56,6 +56,7 @@ export const WeatherLayer: React.FC<{ theme: ThemeKey }> = ({ theme }) => {
       switch (kind) {
         case 'rain':
         case 'neon':
+          if (storm) return { ...base, vx: -4, vy: 16 + Math.random() * 8, size: 16 + Math.random() * 16 };
           return { ...base, vx: -1.2, vy: 11 + Math.random() * 6, size: 10 + Math.random() * 12 };
         case 'snow':
           return { ...base, vx: -0.3 + Math.random() * 0.6, vy: 0.6 + Math.random() * 1.1, size: 1.2 + Math.random() * 2.4 };
@@ -66,7 +67,11 @@ export const WeatherLayer: React.FC<{ theme: ThemeKey }> = ({ theme }) => {
           return { ...base, y: anywhere ? Math.random() * h : h + 10, vx: -0.15 + Math.random() * 0.3, vy: -(0.1 + Math.random() * 0.3), size: 0.8 + Math.random() * 1.8 };
       }
     };
-    let parts = Array.from({ length: COUNT[kind] }, () => spawn(true));
+    let parts = Array.from({ length: storm ? 300 : COUNT[kind] }, () => spawn(true));
+    // Storm lightning: a soft, slow flash now and then, never for reduced-motion players.
+    const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let flash = 0;
+    let nextFlash = 240 + Math.random() * 480;
 
     let raf = 0;
     let t = 0;
@@ -75,6 +80,17 @@ export const WeatherLayer: React.FC<{ theme: ThemeKey }> = ({ theme }) => {
       if (document.hidden) return;
       t += 1;
       ctx.clearRect(0, 0, w, h);
+      if (storm && !calm) {
+        if (--nextFlash <= 0) {
+          flash = 1;
+          nextFlash = 360 + Math.random() * 600;
+        }
+        if (flash > 0.01) {
+          ctx.fillStyle = `rgba(210,220,255,${flash * 0.16})`;
+          ctx.fillRect(0, 0, w, h);
+          flash *= 0.93;
+        }
+      }
       for (let i = 0; i < parts.length; i++) {
         const p = parts[i];
         p.x += p.vx + (kind === 'snow' || kind === 'petals' ? Math.sin((t + p.phase * 60) / 50) * 0.4 : 0);
@@ -88,7 +104,7 @@ export const WeatherLayer: React.FC<{ theme: ThemeKey }> = ({ theme }) => {
         switch (kind) {
           case 'rain':
           case 'neon':
-            ctx.strokeStyle = kind === 'neon' ? (i % 3 ? 'rgba(80,220,255,0.35)' : 'rgba(255,80,200,0.3)') : 'rgba(180,200,230,0.22)';
+            ctx.strokeStyle = kind === 'neon' ? (i % 3 ? 'rgba(80,220,255,0.35)' : 'rgba(255,80,200,0.3)') : storm ? 'rgba(180,200,230,0.3)' : 'rgba(180,200,230,0.22)';
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
@@ -129,7 +145,7 @@ export const WeatherLayer: React.FC<{ theme: ThemeKey }> = ({ theme }) => {
       ro.disconnect();
       parts = [];
     };
-  }, [kind]);
+  }, [kind, storm]);
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-[5] h-full w-full" aria-hidden />;
 };

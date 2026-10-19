@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
-  AccusationResult, AccusationSubmission, BoardCard, BoardString, BoardStyle, CardKind, ChatMessage, ChatPhraseKey,
+  AccusationResult, AccusationSubmission, BoardCard, BoardString, BoardStyle, CardKind, ChatMessage, ChatPhraseKey, ConfrontEntry, SearchEntry,
   Difficulty, GameMode, LabState, Mystery, Player, Role, Room, StatusTag, StringLabel, ThemeKey,
 } from './types';
 import { I18nProvider, useI18n } from './i18n';
@@ -15,7 +15,9 @@ import { FilesPanel } from './components/FilesPanel';
 import { EvidenceInspectorModal } from './components/EvidenceInspectorModal';
 import { CaseFileModal } from './components/CaseFileModal';
 import { InterrogationModal } from './components/InterrogationModal';
+import { AccusationSequence } from './components/AccusationSequence';
 import { AccusationModal } from './components/AccusationModal';
+import { DossierModal } from './components/DossierModal';
 import { RadioChat } from './components/RadioChat';
 import { Toasts, Toast } from './components/Toasts';
 import { HintsModal } from './components/HintsModal';
@@ -50,6 +52,24 @@ export function todayKey(): string {
 }
 
 const SESSION_KEY = 'dbs-session';
+
+/**
+ * A stable id for this tab, so a refresh or a dropped connection gets the same seat back.
+ * Per tab (not per browser) so two tabs can still play against each other.
+ */
+function getPlayerId(): string {
+  try {
+    let id = sessionStorage.getItem('dbs-player-id');
+    if (!id) {
+      id = (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`).replace(/[^\w-]/g, '');
+      sessionStorage.setItem('dbs-player-id', id);
+    }
+    return id;
+  } catch {
+    return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+const PLAYER_ID = getPlayerId();
 
 function loadSession(): Session | null {
   try {
@@ -102,6 +122,10 @@ const Game: React.FC = () => {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [result, setResult] = useState<AccusationResult | null>(null);
   const [hints, setHints] = useState<string[]>([]);
+  const [confrontations, setConfrontations] = useState<ConfrontEntry[]>([]);
+  const [searches, setSearches] = useState<SearchEntry[]>([]);
+  const [sequence, setSequence] = useState<AccusationResult | null>(null);
+  const [dossierOpen, setDossierOpen] = useState(false);
   const [hintsOpen, setHintsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -126,7 +150,22 @@ const Game: React.FC = () => {
   const mysteryRef = useRef<Mystery | null>(null);
   const meRef = useRef<Player | null>(null);
   const tRef = useRef(t);
-  const sessionRef = useRef<Session | null>(null);
+  // After a refresh mid-game, go straight back into the same case.
+  const sessionRef = useRef<Session | null>(
+    (() => {
+      // Only the tab that was actually in this case rejoins on its own; another tab
+      // opening the same invite link should still see the lobby.
+      const saved = loadSession();
+      const urlCode = new URLSearchParams(window.location.search).get('room')?.toUpperCase();
+      let activeHere: string | null = null;
+      try {
+        activeHere = sessionStorage.getItem('dbs-active-room');
+      } catch {
+        /* storage unavailable */
+      }
+      return saved && urlCode === saved.code && activeHere === saved.code ? saved : null;
+    })()
+  );
   const roomRef = useRef<Room | null>(null);
   roomRef.current = room;
   mysteryRef.current = mystery;
@@ -151,20 +190,30 @@ const Game: React.FC = () => {
       // Coming back after a dropped connection: rejoin the same case.
       const session = sessionRef.current;
       if (session) {
-        s.emit('room:join', { code: session.code, name: session.name, role: session.role, lang: localStorage.getItem('dbs-lang') || 'en' });
+        s.emit('room:join', { code: session.code, playerId: PLAYER_ID, name: session.name, role: session.role, lang: localStorage.getItem('dbs-lang') || 'en' });
       }
     });
     s.on('disconnect', () => setConnected(false));
 
-    s.on('room:joined', ({ room, mystery, you, hints }: { room: Room; mystery: Mystery; you: Player; hints: string[] }) => {
+    s.on('room:joined', ({ room, mystery, you, hints, confrontations, searches }: { room: Room; mystery: Mystery; you: Player; hints: string[]; confrontations: ConfrontEntry[]; searches: SearchEntry[] }) => {
       setRoom(room);
       setMystery(mystery);
       setHints(hints || []);
+      setConfrontations(confrontations || []);
+      setSearches(searches || []);
+      if (mystery.modifier && Object.keys(room.cards).length <= mystery.suspects.length) {
+        pushToast(tRef.current('toast.modifier', { label: mystery.modifier.label }));
+      }
       setMe(you);
       setJoinError(null);
       const session = { code: room.roomCode, name: you.name, role: you.role };
       sessionRef.current = session;
       saveSession(session);
+      try {
+        sessionStorage.setItem('dbs-active-room', room.roomCode);
+      } catch {
+        /* storage unavailable */
+      }
       window.history.replaceState(null, '', `?room=${room.roomCode}`);
       soundFx.paper();
     });
@@ -177,9 +226,39 @@ const Game: React.FC = () => {
       window.history.replaceState(null, '', window.location.pathname);
     });
 
-    s.on('room:mystery', ({ mystery, hints }: { mystery: Mystery; hints: string[] }) => {
+    s.on('room:mystery', ({ mystery, hints, confrontations, searches, lateLead }: { mystery: Mystery; hints: string[]; confrontations?: ConfrontEntry[]; searches?: SearchEntry[]; lateLead?: string }) => {
       setMystery(mystery);
       setHints(hints || []);
+      if (confrontations) setConfrontations(confrontations);
+      if (searches) setSearches(searches);
+      if (lateLead) {
+        const ev = mystery.evidence.find(e => e.id === lateLead);
+        // Both players hear about it, but only the owner of the file sees it in their sidebar.
+        if (ev) pushToast(tRef.current('toast.lateLead', { title: ev.title }), ev.role);
+        soundFx.radio();
+      }
+    });
+
+    s.on('room:searched', ({ entry }: { entry: SearchEntry }) => {
+      setSearches(prev => (prev.some(x => x.spotId === entry.spotId) ? prev : [...prev, entry]));
+      soundFx.paper();
+      if (entry.found.length && mysteryRef.current) {
+        const titles = entry.found.map(id => mysteryRef.current!.evidence.find(e => e.id === id)?.title).filter(Boolean).join(', ');
+        pushToast(tRef.current('toast.found', { name: entry.by, title: titles }));
+      }
+    });
+
+    s.on('suspect:confronted', ({ entry, wastedConfronts }: { entry: ConfrontEntry; wastedConfronts?: number; repeat?: boolean }) => {
+      setConfrontations(prev =>
+        prev.some(c => c.suspectId === entry.suspectId && c.evidenceId === entry.evidenceId) ? prev : [...prev, entry]
+      );
+      if (wastedConfronts !== undefined) setRoom(prev => (prev ? { ...prev, wastedConfronts } : prev));
+      if (entry.cracked) soundFx.string();
+      else soundFx.paper();
+      if (entry.by !== meRef.current?.name && mysteryRef.current) {
+        const suspect = mysteryRef.current.suspects.find(x => x.id === entry.suspectId)?.name ?? '';
+        pushToast(tRef.current('toast.confronted', { name: entry.by, suspect }));
+      }
     });
 
     s.on('lab:update', ({ lab }: { lab: LabState }) => {
@@ -199,13 +278,23 @@ const Game: React.FC = () => {
       soundFx.paper();
     });
 
-    s.on('room:players', ({ players, joined }: { players: Player[]; joined?: string }) => {
-      const prevCount = roomRef.current?.players.length ?? 0;
-      if (players.length < prevCount) pushToast(tRef.current('toast.left'));
+    s.on('room:players', ({ players, joined, returned, left }: { players: Player[]; joined?: string; returned?: string; left?: string }) => {
+      const before = new Map((roomRef.current?.players ?? []).map(p => [p.id, p]));
+      for (const p of players) {
+        // A partner whose connection just dropped: their seat is being held.
+        if (p.id !== meRef.current?.id && before.get(p.id)?.connected && !p.connected) {
+          pushToast(tRef.current('toast.lostConnection', { name: p.name }));
+        }
+      }
       setRoom(prev => (prev ? { ...prev, players } : prev));
       if (joined) {
         pushToast(tRef.current('toast.joined', { name: joined }));
         soundFx.radio();
+      }
+      if (returned) pushToast(tRef.current('toast.back', { name: returned }));
+      if (left) {
+        pushToast(tRef.current('toast.leftNamed', { name: left }));
+        setPartnerCursor(null);
       }
     });
 
@@ -278,7 +367,9 @@ const Game: React.FC = () => {
 
     s.on('case:result', (res: AccusationResult) => {
       setResult(res);
-      setAccusationOpen(true);
+      // Play the case out first; the verdict opens when the sequence ends.
+      setAccusationOpen(false);
+      setSequence(res);
       setRoom(prev => (prev ? { ...prev, status: res.status, attemptsUsed: res.attemptsUsed, score: res.score ?? prev.score } : prev));
       const daily = roomRef.current?.daily;
       if (daily && res.status !== 'active') {
@@ -288,8 +379,6 @@ const Game: React.FC = () => {
           /* storage unavailable */
         }
       }
-      if (res.status === 'solved') soundFx.solved();
-      else soundFx.wrong();
     });
 
     setSocket(s);
@@ -312,23 +401,32 @@ const Game: React.FC = () => {
   // ─── Lobby actions ───
   const createCase = (opts: CreateCaseOptions) => {
     setJoinError(null);
-    socket?.emit('room:create', { ...opts, lang });
+    socket?.emit('room:create', { ...opts, playerId: PLAYER_ID, lang });
   };
 
   const joinCase = (code: string, name: string, role: Role) => {
     setJoinError(null);
-    socket?.emit('room:join', { code: code.trim().toUpperCase(), name, role, lang });
+    socket?.emit('room:join', { code: code.trim().toUpperCase(), playerId: PLAYER_ID, name, role, lang });
   };
 
   const leaveCase = () => {
     socket?.emit('room:leave');
     sessionRef.current = null;
     saveSession(null);
+    try {
+      sessionStorage.removeItem('dbs-active-room');
+    } catch {
+      /* storage unavailable */
+    }
     setRoom(null);
     setMystery(null);
     setMe(null);
     setResult(null);
     setHints([]);
+    setConfrontations([]);
+    setSearches([]);
+    setSequence(null);
+    setDossierOpen(false);
     setHintsOpen(false);
     setAccusationOpen(false);
     window.history.replaceState(null, '', window.location.pathname);
@@ -398,12 +496,18 @@ const Game: React.FC = () => {
     );
   }
 
-  const partner = room.players.find(p => p.socketId !== me.socketId);
+  const partner = room.players.find(p => p.id !== me.id);
   const pinnedRefs = new Set(Object.values(room.cards).map(c => c.refId));
   const inspectItem = inspectId ? mystery.evidence.find(e => e.id === inspectId) : null;
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#0b0806] text-amber-50">
+      {!connected && (
+        <div role="status" className="shrink-0 flex items-center justify-center gap-2 bg-[var(--blood)] px-3 py-1.5 text-[13px] font-semibold text-white">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-white" /> {t('conn.lost')}
+        </div>
+      )}
+
       <HeaderBar
         room={room}
         mystery={mystery}
@@ -453,13 +557,15 @@ const Game: React.FC = () => {
           lab={room.lab}
           difficulty={mystery.difficulty}
           tutorial={room.tutorial}
+          foundItems={new Set(searches.flatMap(x => x.found))}
+          onOpenPlan={() => setPlanOpen(true)}
           onRequestLab={(id) => {
             socket?.emit('lab:request', { evidenceId: id });
             fireTutorial('lab');
           }}
         />
 
-        <div className={`flex-1 relative min-w-0 verdict-camera ${accusationOpen && result && result.status !== 'active' ? 'verdict-zoom' : ''}`}>
+        <div className={`flex-1 relative min-w-0 verdict-camera ${(sequence || (accusationOpen && result && result.status !== 'active')) ? 'verdict-zoom' : ''}`}>
           <CorkboardCanvas
             ref={canvasRef}
             room={room}
@@ -468,7 +574,7 @@ const Game: React.FC = () => {
             partner={partner}
             solo={room.mode === 'solo'}
             boardStyle={boardStyle}
-            partnerCursor={partnerCursor}
+            partnerCursor={partner?.connected ? partnerCursor : null}
             onMoveCard={moveCard}
             onDropFile={(kind, refId, at) => placeCard(kind, refId, at)}
             onAddNote={(text) => placeCard('note', 'note', undefined, text)}
@@ -485,7 +591,8 @@ const Game: React.FC = () => {
             }}
             onCursor={(x, y) => socket?.emit('presence:cursor', { x, y })}
             onCopied={() => pushToast(t('toast.copied'))}
-            flashlight={flashlight}
+            flashlight={flashlight || mystery.modifier?.key === 'blackout'}
+            confrontations={confrontations}
             extraTools={
               <button
                 onClick={() => setTimelineOpen(v => !v)}
@@ -498,7 +605,7 @@ const Game: React.FC = () => {
             }
           />
 
-          {weather && <WeatherLayer theme={mystery.theme} />}
+          {(weather || mystery.modifier?.key === 'storm') && <WeatherLayer theme={mystery.theme} storm={mystery.modifier?.key === 'storm'} />}
 
           {timelineOpen && (
             <TimelinePanel mystery={mystery} pinnedRefs={pinnedRefs} onInspect={(id) => setInspectId(id)} onClose={() => setTimelineOpen(false)} />
@@ -512,6 +619,7 @@ const Game: React.FC = () => {
             onSend={(text) => socket?.emit('chat:send', { text })}
             onPhrase={sendPhrase}
             solo={room.mode === 'solo'}
+            noisy={mystery.modifier?.key === 'blackout'}
           />
           )}
 
@@ -540,6 +648,8 @@ const Game: React.FC = () => {
       {caseFileOpen && (
         <CaseFileModal
           mystery={mystery}
+          pinnedEvidence={mystery.evidence.filter(e => pinnedRefs.has(e.id))}
+          confrontations={confrontations}
           onClose={() => {
             setCaseFileOpen(false);
             fireTutorial('caseFileClosed');
@@ -551,6 +661,9 @@ const Game: React.FC = () => {
         <FloorPlanModal
           mystery={mystery}
           visibleEvidenceIds={new Set([...pinnedRefs, ...mystery.evidence.filter(e => e.role === me.role || room.mode === 'solo').map(e => e.id)])}
+          searches={searches}
+          active={room.status === 'active'}
+          onSearch={(spotId) => socket?.emit('room:search', { spotId })}
           onClose={() => setPlanOpen(false)}
         />
       )}
@@ -571,8 +684,23 @@ const Game: React.FC = () => {
           mystery={mystery}
           hasPartner={!!partner}
           onShareQuote={(suspectId, index) => sendPhrase('quote', suspectId, index)}
+          pinnedEvidence={mystery.evidence.filter(e => pinnedRefs.has(e.id))}
+          confrontations={confrontations}
+          active={room.status === 'active'}
+          onConfront={(suspectId, evidenceId) => socket?.emit('suspect:confront', { suspectId, evidenceId })}
           onAsk={() => fireTutorial('asked')}
           onClose={() => setInterrogationOpen(false)}
+        />
+      )}
+
+      {sequence && (
+        <AccusationSequence
+          mystery={mystery}
+          result={sequence}
+          onDone={() => {
+            setSequence(null);
+            setAccusationOpen(true);
+          }}
         />
       )}
 
@@ -588,7 +716,12 @@ const Game: React.FC = () => {
           onDismissResult={() => setResult(null)}
           onClose={() => setAccusationOpen(false)}
           onNewCase={leaveCase}
+          onOpenDossier={() => setDossierOpen(true)}
         />
+      )}
+
+      {dossierOpen && result?.solution && (
+        <DossierModal mystery={mystery} room={room} result={result} onClose={() => setDossierOpen(false)} />
       )}
     </div>
   );

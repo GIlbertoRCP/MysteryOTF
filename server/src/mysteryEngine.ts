@@ -2,9 +2,10 @@ import {
   Puzzle, Difficulty, EvidenceKind, Lang, PublicEvidence, PublicMystery, PublicSuspect, Role, Solution, ThemeKey, TraitDim,
 } from './types.js';
 import {
-  ANALYST_DIMS, CAUSES, LEAD_DIMS, MOTIVES, T, TEXT, TRAITS, fill,
+  ANALYST_DIMS, CAUSES, FAKE_BLOOD, FOLLOW_UP, LEAD_DIMS, MODIFIERS, ModifierKey, MOTIVES, PLANTED_ITEMS, SPOTS, SPOT_FOUND,
+  SPOT_NOTHING, SPOT_SCENE, STORY, T, TAMPERED_NOTE, TEXT, TRAITS, fill,
 } from './content/common.js';
-import { THEMES, THEME_KEYS } from './content/themes.js';
+import { THEMES, THEME_KEYS, portraitLook } from './content/themes.js';
 import { generatePlan, Plan } from './floorPlan.js';
 
 // ─── Seeded RNG (xmur3 hash + mulberry32) ────────────────────────────────────
@@ -52,6 +53,9 @@ class SeededRandom {
 }
 
 // ─── Blueprint: the case with no language attached ───────────────────────────
+
+/** Clue kinds that can be held back and arrive later as a new lead. */
+const LATE_KINDS: EvidenceKind[] = ['witness', 'camera', 'phone', 'smudge', 'shoeprint', 'trace', 'scrapings'];
 
 const ALL_DIMS: TraitDim[] = ['height', 'coat', 'voice', 'hand', 'footwear', 'habit', 'blood'];
 const SUSPECT_COLORS = ['#e17055', '#74b9ff', '#55efc4', '#fdcb6e', '#a29bfe', '#fd79a8', '#81ecec', '#fab1a0'];
@@ -104,6 +108,19 @@ export interface Blueprint {
   slip: boolean;
   /** Mastermind twist: an innocent who lies to cover for the killer */
   accompliceIdx: number | null;
+  /** Twist: an item placed by the body to frame an innocent */
+  planted: { suspectIdx: number; itemIdx: number } | null;
+  /** Twist: a witness falsely accuses an innocent whom a staff record clears */
+  claim: { suspectIdx: number; witnessIdx: number; min: number } | null;
+  /** Twist: a clue held back that arrives a few minutes into the case */
+  lateEvidenceId: string | null;
+  /** A complication: blackout (no cameras), storm (no footprints), or tampered evidence */
+  modifier: ModifierKey | null;
+  powerCutMin: number;
+  /** Tampered evidence: a decoy weapon smeared to look used */
+  tampered: { weaponIdx: number; fakeIdx: number } | null;
+  /** Searchable spots, two per room. Room 0 is the crime scene. */
+  spots: { room: number; spotIdx: number; noteIdx: number; holdsItems: boolean }[];
   receiptPlaceIdx: number;
   receiptMin: number;
   weapons: { weaponIdx: number; optionId: string }[];
@@ -113,9 +130,9 @@ export interface Blueprint {
 }
 
 const DIFFICULTY = {
-  Novice: { suspects: 4, verified: 1, places: 3, weapons: 3, extraMotiveDocs: 1, slip: true, frame: false, prefer: 'max', accomplice: 0 },
-  Detective: { suspects: 5, verified: 2, places: 3, weapons: 3, extraMotiveDocs: 2, slip: true, frame: true, prefer: 'min+1', accomplice: 0 },
-  Mastermind: { suspects: 6, verified: 2, places: 4, weapons: 4, extraMotiveDocs: 99, slip: false, frame: true, prefer: 'min', accomplice: 0.5 },
+  Novice: { suspects: 4, verified: 1, places: 3, weapons: 3, extraMotiveDocs: 1, slip: true, frame: false, prefer: 'max', accomplice: 0, planted: 0, claim: 0, late: 0, modifier: 0 },
+  Detective: { suspects: 5, verified: 2, places: 3, weapons: 3, extraMotiveDocs: 2, slip: true, frame: true, prefer: 'min+1', accomplice: 0, planted: 0.4, claim: 0.35, late: 0.6, modifier: 0.35 },
+  Mastermind: { suspects: 6, verified: 2, places: 4, weapons: 4, extraMotiveDocs: 99, slip: false, frame: true, prefer: 'min', accomplice: 0.5, planted: 0.5, claim: 0.5, late: 0.8, modifier: 0.5 },
 } as const;
 
 function matching(suspects: BlueprintSuspect[], killer: BlueprintSuspect, dims: TraitDim[], useAlibi: boolean): number {
@@ -125,10 +142,10 @@ function matching(suspects: BlueprintSuspect[], killer: BlueprintSuspect, dims: 
   }).length;
 }
 
-function chooseClueDims(rng: SeededRandom, suspects: BlueprintSuspect[], killer: BlueprintSuspect, prefer: string): TraitDim[] | null {
+function chooseClueDims(rng: SeededRandom, suspects: BlueprintSuspect[], killer: BlueprintSuspect, prefer: string, allowed: TraitDim[]): TraitDim[] | null {
   const valid: TraitDim[][] = [];
-  for (let mask = 1; mask < 1 << ALL_DIMS.length; mask++) {
-    const dims = ALL_DIMS.filter((_, i) => mask & (1 << i));
+  for (let mask = 1; mask < 1 << allowed.length; mask++) {
+    const dims = allowed.filter((_, i) => mask & (1 << i));
     const leadDims = dims.filter(d => LEAD_DIMS.includes(d));
     const analystDims = dims.filter(d => ANALYST_DIMS.includes(d));
     if (leadDims.length === 0 || analystDims.length === 0) continue;
@@ -173,6 +190,11 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
   const bioIdxs = rng.shuffle(th.bioLines.map((_, i) => i));
   const colors = rng.shuffle(SUSPECT_COLORS);
 
+  // A complication for the case. Blackouts kill the cameras; storms wash out footprints.
+  const modifier: ModifierKey | null = rng.next() < cfg.modifier ? rng.pick(['blackout', 'storm', 'tampered'] as ModifierKey[]) : null;
+  const powerCutMin = startMin + rng.int(1, 6);
+  const allowedDims = ALL_DIMS.filter(d => !(modifier === 'blackout' && d === 'coat') && !(modifier === 'storm' && d === 'footwear'));
+
   // Roll traits until the deduction puzzle is uniquely solvable and truly co-op.
   let suspects: BlueprintSuspect[] = [];
   let killerIdx = 0;
@@ -202,9 +224,9 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
       verified: verifiedSet.has(i),
       noticed: 'nothing',
     }));
-    clueDims = chooseClueDims(rng, suspects, suspects[killerIdx], cfg.prefer);
+    clueDims = chooseClueDims(rng, suspects, suspects[killerIdx], cfg.prefer, allowedDims);
   }
-  if (!clueDims) clueDims = [...ALL_DIMS]; // practically unreachable
+  if (!clueDims) clueDims = [...allowedDims]; // practically unreachable
 
   // Ids are random so they never leak the answer.
   for (const s of suspects) {
@@ -239,6 +261,26 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
   if (difficulty !== 'Novice' && verifiedIdxs.length) {
     const witnessChoices = th.witnesses.map((_, i) => i).filter(i => i !== witnessIdx);
     sighting = { suspectIdx: rng.pick(verifiedIdxs), witnessIdx: rng.pick(witnessChoices) };
+  }
+
+  // Twist: an item planted by the body to frame an innocent. The lab shows it was placed after the death.
+  let planted: Blueprint['planted'] = null;
+  const plantable = innocentIdxs.filter(i => i !== accompliceIdx);
+  if (rng.next() < cfg.planted && plantable.length) {
+    planted = { suspectIdx: rng.pick(plantable), itemIdx: rng.int(0, PLANTED_ITEMS.length - 1) };
+  }
+
+  // Twist: a lone witness accuses an innocent whom a staff record places elsewhere.
+  let claim: Blueprint['claim'] = null;
+  const recordCleared = verifiedIdxs.filter(i => i !== sighting?.suspectIdx);
+  if (rng.next() < cfg.claim && recordCleared.length) {
+    const usedWitnesses = [witnessIdx, sighting?.witnessIdx];
+    const free = th.witnesses.map((_, i) => i).filter(i => !usedWitnesses.includes(i));
+    claim = {
+      suspectIdx: rng.pick(recordCleared),
+      witnessIdx: free.length ? rng.pick(free) : rng.int(0, th.witnesses.length - 1),
+      min: startMin + rng.int(8, 22),
+    };
   }
 
   // Interview flavour: one innocent may confirm the habit clue, the killer may frame someone.
@@ -281,6 +323,8 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
     if (placeIdx === killer.placeIdx) alibiEvidenceId = record.id;
   }
   if (sighting) ev('lead', 'sighting', { ref: sighting.suspectIdx });
+  if (planted) ev('analyst', 'planted', { ref: planted.suspectIdx });
+  if (claim) ev('lead', 'claim', { ref: claim.suspectIdx });
 
   // With an accomplice, the receipt is what actually breaks the alibi.
   if (accompliceIdx !== null) alibiEvidenceId = ev('lead', 'receipt', { ref: accompliceIdx }).id;
@@ -301,6 +345,31 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
 
   const trueWeaponOption = weapons.find(w => w.weaponIdx === trueWeaponIdx)!;
 
+  // Tampered evidence: one decoy is smeared to look like the murder weapon.
+  const tampered = modifier === 'tampered'
+    ? { weaponIdx: rng.pick(weapons.filter(w => w.weaponIdx !== trueWeaponIdx)).weaponIdx, fakeIdx: rng.int(0, FAKE_BLOOD.length - 1) }
+    : null;
+
+  // Two searchable spots per room. Recovered items sit in the first spot of the room they were found in.
+  const itemRooms = new Set(evidence.filter(e => e.kind === 'weapon').map(e => e.foundPlaceIdx! + 1));
+  const spots: Blueprint['spots'] = [];
+  for (let room = 0; room <= th.alibiPlaces.length; room++) {
+    const picks = rng.shuffle(SPOTS.map((_, i) => i)).slice(0, 2);
+    picks.forEach((spotIdx, k) => {
+      spots.push({
+        room,
+        spotIdx,
+        noteIdx: room === 0 ? rng.int(0, SPOT_SCENE.length - 1) : rng.int(0, SPOT_NOTHING.length - 1),
+        holdsItems: k === 0 && itemRooms.has(room),
+      });
+    });
+  }
+
+  // Twist: one physical clue arrives late, as a new lead a few minutes in.
+  let lateEvidenceId: string | null = null;
+  const lateCandidates = evidence.filter(e => LATE_KINDS.includes(e.kind));
+  if (rng.next() < cfg.late && lateCandidates.length) lateEvidenceId = rng.pick(lateCandidates).id;
+
   return {
     seed: seedStr,
     theme,
@@ -318,6 +387,13 @@ export function buildBlueprint(difficulty: Difficulty, themeKey: ThemeKey, seedS
     todMin,
     plan,
     sighting,
+    planted,
+    claim,
+    lateEvidenceId,
+    modifier,
+    powerCutMin,
+    tampered,
+    spots,
     suspects,
     killerIdx,
     clueDims,
@@ -364,6 +440,8 @@ function makePuzzle(bp: Blueprint, e: BlueprintEvidence, details: string): Puzzl
       return { type: 'sole', answer: TRAITS.footwear[killer.traits.footwear].key };
     case 'trace':
       return { type: 'uv', key: TRAITS.habit[killer.traits.habit].key };
+    case 'planted':
+      return { type: 'uv', key: 'planted' };
     case 'scrapings':
       return { type: 'blood', answer: TRAITS.blood[killer.traits.blood].key };
     case 'diary':
@@ -443,6 +521,7 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
       bio: fill(TEXT.bio, lang, { role: seed.role, line: fill(th.bioLines[s.bioIdx], lang, base) }),
       alibiPlace: L(place.label),
       alibiRoomId: `room-${s.placeIdx + 1}`,
+      look: portraitLook(seed.name),
       alibiStatement: fill(TEXT.alibiStatement, lang, { ...base, place: place.name }),
       traits,
       traitKeys,
@@ -476,10 +555,20 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
       : e.kind === 'receipt' ? { min: bp.receiptMin, roomId: `room-${bp.receiptPlaceIdx + 1}`, suspectId: bp.suspects[e.ref!].id }
       : e.kind === 'sighting' ? { min: bp.todMin - 1, roomId: `room-${bp.suspects[e.ref!].placeIdx + 1}`, suspectId: bp.suspects[e.ref!].id }
       : e.kind === 'weapon' ? { min: -1, roomId: `room-${e.foundPlaceIdx! + 1}` }
+      : e.kind === 'claim' ? { min: bp.claim!.min, roomId: scene0, suspectId: bp.suspects[e.ref!].id }
       : undefined;
     const out = (title: string, summary: string, details: string): PublicEvidence => ({
       id: e.id, role: e.role, kind: e.kind, title, summary, details, event, puzzle: puzzleFor(e, details),
-      weapon: e.kind === 'weapon' ? { key: th.weapons[e.ref!].key, residue: e.ref === bp.trueWeaponIdx } : undefined,
+      weapon: e.kind === 'weapon' ? { key: th.weapons[e.ref!].key, residue: e.ref === bp.trueWeaponIdx || e.ref === bp.tampered?.weaponIdx } : undefined,
+      spotId: e.kind === 'weapon' ? spotIdFor(bp, e.foundPlaceIdx! + 1) : undefined,
+      model:
+        e.kind === 'autopsy' ? { type: 'watch', min: bp.todMin, engraving: initialsOf(victim.name) }
+        : e.kind === 'planted' ? { type: 'monogram', item: ['handkerchief', 'glove', 'cufflink', 'case'][bp.planted!.itemIdx], initials: initialsOf(nameOf(bp.suspects[e.ref!])) }
+        : e.kind === 'document' ? { type: 'letter', seal: bp.suspects[e.ref!].color }
+        : undefined,
+      confirms: e.kind === 'record'
+        ? bp.suspects.filter((s, i) => s.verified && s.placeIdx === e.ref && i !== bp.sighting?.suspectIdx).map(s => s.id)
+        : undefined,
     });
 
     switch (e.kind) {
@@ -550,6 +639,22 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
           fill(TEXT.sightingDetails, lang, params)
         );
       }
+      case 'planted': {
+        const s = bp.suspects[e.ref!];
+        const item = PLANTED_ITEMS[bp.planted!.itemIdx];
+        const params = { ...base, item: item.name, itemCap: item.cap, itemFull: item.full, initials: initialsOf(nameOf(s)) };
+        return out(fill(TEXT.plantedTitle, lang, params), fill(TEXT.plantedSummary, lang, params), fill(TEXT.plantedDetails, lang, params));
+      }
+      case 'claim': {
+        const s = bp.suspects[e.ref!];
+        const w = th.witnesses[bp.claim!.witnessIdx];
+        const params = { ...base, witness: w.name, name: nameOf(s), time: formatTime(bp.claim!.min, lang) };
+        return out(
+          fill(TEXT.claimTitle, lang, { witness: w.label, name: nameOf(s) }),
+          fill(TEXT.claimSummary, lang, params),
+          fill(TEXT.claimDetails, lang, params)
+        );
+      }
       case 'receipt': {
         const place = th.alibiPlaces[bp.receiptPlaceIdx];
         const params = { ...base, place: place.name, name: nameOf(bp.suspects[e.ref!]), time: formatTime(bp.receiptMin, lang) };
@@ -564,7 +669,8 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
       case 'weapon': {
         const w = th.weapons[e.ref!];
         const params = { ...base, weapon: w.label, place: th.alibiPlaces[e.foundPlaceIdx!].name, desc: w.desc };
-        return out(fill(TEXT.weaponTitle, lang, params), fill(TEXT.weaponSummary, lang, params), fill(TEXT.weaponDetails, lang, params));
+        const smeared = bp.tampered?.weaponIdx === e.ref ? ' ' + fill(TAMPERED_NOTE, lang, { fake: FAKE_BLOOD[bp.tampered!.fakeIdx] }) : '';
+        return out(fill(TEXT.weaponTitle, lang, params), fill(TEXT.weaponSummary, lang, params), fill(TEXT.weaponDetails, lang, params) + smeared);
       }
     }
   });
@@ -600,8 +706,12 @@ export function localize(bp: Blueprint, lang: Lang): PublicMystery {
         label: r.idx === 0 ? L(scene.label) : L(th.alibiPlaces[r.idx - 1].label),
         kind: r.idx === 0 ? 'scene' : 'room',
         x: r.x, y: r.y, w: r.w, h: r.h, door: r.door, walk: r.walk,
+        spots: bp.spots.filter(sp => sp.room === r.idx).map((sp, k) => ({ id: `spot-${r.idx}-${k}`, label: L(SPOTS[sp.spotIdx].label) })),
       })),
     },
+    modifier: bp.modifier
+      ? { key: bp.modifier, label: L(MODIFIERS[bp.modifier].label), note: fill(MODIFIERS[bp.modifier].note, lang, { time: formatTime(bp.powerCutMin, lang) }) }
+      : null,
     synopsis: fill(th.synopsis, lang, { ...base, occupation: victim.occupation, count: String(bp.suspects.length) }),
     suspects,
     evidence,
@@ -658,6 +768,158 @@ export function dailyCase(date: string): { seed: string; theme: ThemeKey; diffic
   let h = 0;
   for (const ch of date) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return { seed: `DAILY-${date}`, theme: THEME_KEYS[h % THEME_KEYS.length], difficulty: 'Detective' };
+}
+
+const TITLE_WORDS = /^(dr\.|don|doña|padre|fra|sister|count|colonel|professor|general|maestro|lord|lady|baron|duchess|captain|ambassador|signor|signora|madame|contessa|commander)$/i;
+function initialsOf(name: string): string {
+  const parts = name.replace(/["“”]/g, '').split(/\s+/).filter(p => !TITLE_WORDS.test(p));
+  return `${parts[0]?.[0] ?? ''}.${parts.length > 1 ? ` ${parts[parts.length - 1][0]}.` : ''}`;
+}
+
+export interface ConfrontOutcome {
+  cracked: boolean;
+  /** A new question that cracking them unlocks */
+  followUp?: { q: string; a: string };
+  /** cleared: proves them innocent of the lie; admit: confirms a motive; confess/slip: points somewhere new */
+  kind: 'admit' | 'cleared' | 'confess' | 'slip' | 'deflect';
+  line: string;
+}
+
+/**
+ * Presenting a clue to a suspect. Most clues get a brush-off; the right one makes them crack.
+ * Runs on the server only, so which clue cracks whom never reaches the browser.
+ */
+export function confront(bp: Blueprint, suspectId: string, evidenceId: string, lang: Lang): ConfrontOutcome | null {
+  const th = THEMES[bp.theme];
+  const sIdx = bp.suspects.findIndex(s => s.id === suspectId);
+  const e = bp.evidence.find(x => x.id === evidenceId);
+  if (sIdx < 0 || !e) return null;
+  const s = bp.suspects[sIdx];
+  const killer = bp.suspects[bp.killerIdx];
+  const nameOf = (x: BlueprintSuspect) => th.suspects[x.seedIdx].name;
+  const base = { victim: th.victims[bp.victimIdx].name, scene: th.scenes[bp.sceneIdx].name };
+
+  // What an innocent remembers once they open up: a true detail about the killer.
+  const seenDims = bp.clueDims.filter(d => d !== 'blood');
+  const seen = () => {
+    const dim = seenDims[sIdx % Math.max(1, seenDims.length)];
+    if (!dim) return fill(FOLLOW_UP.aHeard, lang, base);
+    return fill(FOLLOW_UP.seen[dim as keyof typeof FOLLOW_UP.seen], lang, { ...base, value: TRAITS[dim][killer.traits[dim]].clue });
+  };
+  const frame = () => {
+    const target = bp.suspects[killer.frameTargetIdx ?? (bp.killerIdx === 0 ? 1 : 0)];
+    return fill(FOLLOW_UP.aFrame, lang, { ...base, other: nameOf(target) });
+  };
+
+  if (e.kind === 'document' && e.ref === sIdx) {
+    return {
+      cracked: true,
+      kind: 'admit',
+      line: fill(MOTIVES[s.motiveIdx].admit, lang, base),
+      followUp: { q: fill(FOLLOW_UP.qMore, lang, base), a: sIdx === bp.killerIdx ? frame() : seen() },
+    };
+  }
+  if (e.kind === 'receipt' && e.ref === sIdx && bp.accompliceIdx === sIdx) {
+    return {
+      cracked: true,
+      kind: 'confess',
+      line: fill(TEXT.confrontAccomplice, lang, { ...base, killer: nameOf(killer), receiptPlace: th.alibiPlaces[bp.receiptPlaceIdx].name }),
+      followUp: { q: fill(FOLLOW_UP.qWhy, lang, base), a: fill(FOLLOW_UP.aWhy, lang, { ...base, killer: nameOf(killer) }) },
+    };
+  }
+  if (e.kind === 'sighting' && e.ref === sIdx && bp.sighting) {
+    return {
+      cracked: true,
+      kind: 'cleared',
+      line: fill(TEXT.confrontSighting, lang, { ...base, place: th.alibiPlaces[s.placeIdx].name, witness: th.witnesses[bp.sighting.witnessIdx].name }),
+      followUp: { q: fill(FOLLOW_UP.qWho, lang, base), a: seen() },
+    };
+  }
+  if (e.kind === 'planted' && e.ref === sIdx) {
+    return { cracked: true, kind: 'cleared', line: fill(TEXT.confrontPlanted, lang, base), followUp: { q: fill(FOLLOW_UP.qWho, lang, base), a: seen() } };
+  }
+  if (e.kind === 'claim' && e.ref === sIdx) {
+    return {
+      cracked: true,
+      kind: 'cleared',
+      line: fill(TEXT.confrontClaim, lang, { ...base, place: th.alibiPlaces[s.placeIdx].name }),
+      followUp: { q: fill(FOLLOW_UP.qWho, lang, base), a: seen() },
+    };
+  }
+  if (e.kind === 'autopsy' && sIdx === bp.killerIdx && bp.slip) {
+    return { cracked: true, kind: 'slip', line: fill(TEXT.confrontSlip, lang, base), followUp: { q: fill(FOLLOW_UP.qHeard, lang, base), a: fill(FOLLOW_UP.aHeard, lang, base) } };
+  }
+  const variants = [TEXT.deflect0, TEXT.deflect1, TEXT.deflect2];
+  return { cracked: false, kind: 'deflect', line: fill(variants[(sIdx + evidenceId.length) % variants.length], lang, base) };
+}
+
+function spotIdFor(bp: Blueprint, room: number): string | undefined {
+  const k = bp.spots.filter(sp => sp.room === room).findIndex(sp => sp.holdsItems);
+  return k >= 0 ? `spot-${room}-${k}` : undefined;
+}
+
+/** Searching a spot on the floor plan: what you find, and which item cards it unlocks. */
+export function searchSpot(bp: Blueprint, spotId: string, lang: Lang): { text: string; found: string[] } | null {
+  const m = /^spot-(\d+)-(\d+)$/.exec(spotId);
+  if (!m) return null;
+  const room = Number(m[1]);
+  const spot = bp.spots.filter(sp => sp.room === room)[Number(m[2])];
+  if (!spot) return null;
+  const th = THEMES[bp.theme];
+  if (spot.holdsItems) {
+    const items = bp.evidence.filter(e => e.kind === 'weapon' && e.foundPlaceIdx! + 1 === room);
+    const names = items.map(e => th.weapons[e.ref!].name);
+    const list = names.length === 1 ? names[0][lang] : names.map(n => n[lang]).join(lang === 'es' ? ' y ' : ' and ');
+    return { text: fill(SPOT_FOUND, lang, { spot: SPOTS[spot.spotIdx].name, weapon: list }), found: items.map(e => e.id) };
+  }
+  return { text: fill((room === 0 ? SPOT_SCENE : SPOT_NOTHING)[spot.noteIdx], lang), found: [] };
+}
+
+/** The true sequence of events, revealed once the case is closed. */
+export function storyFor(bp: Blueprint, lang: Lang): { min: number; text: string }[] {
+  const th = THEMES[bp.theme];
+  const killer = bp.suspects[bp.killerIdx];
+  const name = (x: BlueprintSuspect) => th.suspects[x.seedIdx].name;
+  const base = {
+    victim: th.victims[bp.victimIdx].name,
+    scene: th.scenes[bp.sceneIdx].name,
+    killer: name(killer),
+    claimed: th.alibiPlaces[killer.placeIdx].name,
+    weapon: th.weapons[bp.trueWeaponIdx].name,
+  };
+  const ev: { min: number; text: T; params?: Record<string, string | T> }[] = [];
+  const has = (k: EvidenceKind) => bp.evidence.some(e => e.kind === k);
+  ev.push({ min: bp.startMin, text: STORY.meeting });
+  if (bp.modifier === 'blackout') ev.push({ min: bp.powerCutMin, text: STORY.powerCut });
+  ev.push({ min: bp.todMin - 6, text: STORY.leaves });
+  if (has('witness')) ev.push({ min: bp.witnessMin, text: STORY.witness, params: { witness: th.witnesses[bp.witnessIdx].name } });
+  if (has('camera')) ev.push({ min: bp.cameraMin, text: STORY.camera, params: { source: th.cameras[bp.cameraIdx] } });
+  if (has('phone')) ev.push({ min: bp.phoneMin, text: STORY.phone });
+  if (bp.sighting) {
+    const s = bp.suspects[bp.sighting.suspectIdx];
+    ev.push({ min: bp.todMin - 1, text: STORY.sighting, params: { innocent: name(s), place: th.alibiPlaces[s.placeIdx].name, witness: th.witnesses[bp.sighting.witnessIdx].name } });
+  }
+  ev.push({ min: bp.todMin, text: STORY.murder });
+  const trueItem = bp.evidence.find(e => e.kind === 'weapon' && e.ref === bp.trueWeaponIdx);
+  if (trueItem) ev.push({ min: bp.todMin + 3, text: STORY.hides, params: { place: th.alibiPlaces[trueItem.foundPlaceIdx!].name } });
+  if (bp.tampered) ev.push({ min: bp.todMin + 4, text: STORY.tampers, params: { fake: FAKE_BLOOD[bp.tampered.fakeIdx], decoy: th.weapons[bp.tampered.weaponIdx].name } });
+  if (bp.planted) {
+    const s = bp.suspects[bp.planted.suspectIdx];
+    ev.push({ min: bp.todMin + 5, text: STORY.plants, params: { innocent: name(s), item: PLANTED_ITEMS[bp.planted.itemIdx].name } });
+  }
+  if (bp.accompliceIdx !== null) {
+    const a = bp.suspects[bp.accompliceIdx];
+    ev.push({ min: bp.receiptMin, text: STORY.receipt, params: { accomplice: name(a), place: th.alibiPlaces[bp.receiptPlaceIdx].name } });
+    ev.push({ min: bp.todMin + 9, text: STORY.accomplice, params: { accomplice: name(a) } });
+  }
+  ev.push({ min: bp.todMin + 8, text: STORY.returns });
+  if (bp.claim) {
+    const s = bp.suspects[bp.claim.suspectIdx];
+    ev.push({ min: bp.startMin + 45, text: STORY.claim, params: { innocent: name(s), witness: th.witnesses[bp.claim.witnessIdx].name } });
+  }
+  return ev
+    .sort((a, b) => a.min - b.min)
+    .map(e => ({ min: e.min, text: fill(e.text, lang, { ...base, ...(e.params ?? {}) }) }));
 }
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);

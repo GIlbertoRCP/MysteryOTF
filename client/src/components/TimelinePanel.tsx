@@ -83,7 +83,7 @@ export const TimelinePanel: React.FC<Props> = ({ mystery, pinnedRefs, onInspect,
         <div className="relative h-full min-w-[560px] mx-8">
           {/* The murder window */}
           <div
-            className="absolute top-0 bottom-6 rounded bg-blood/15 border-x border-[var(--blood)]/40"
+            className="absolute top-0 bottom-6 rounded bg-blood/15 border-x border-blood/40"
             style={{ left: `${pct(windowStart)}%`, width: `${pct(windowEnd) - pct(windowStart)}%` }}
           />
           <span className="absolute -top-0.5 text-[11px] font-semibold text-[var(--blood-bright)]" style={{ left: `calc(${pct(windowStart)}% + 6px)` }}>

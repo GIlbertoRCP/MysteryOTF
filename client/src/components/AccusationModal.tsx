@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import confetti from 'canvas-confetti';
-import { X, Gavel, ArrowLeft, RotateCcw, Copy, Check } from 'lucide-react';
+import { X, Gavel, ArrowLeft, RotateCcw, Copy, Check, FileText } from 'lucide-react';
 import { AccusationResult, AccusationSubmission, Mystery, Room } from '../types';
 import { useI18n } from '../i18n';
-import { initials } from '../cardInfo';
+import { Portrait } from './Portrait';
 import { useElapsed } from './HeaderBar';
 
 interface Props {
@@ -14,9 +14,10 @@ interface Props {
   onDismissResult: () => void;
   onClose: () => void;
   onNewCase: () => void;
+  onOpenDossier?: () => void;
 }
 
-export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubmit, onDismissResult, onClose, onNewCase }) => {
+export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubmit, onDismissResult, onClose, onNewCase, onOpenDossier }) => {
   const { t } = useI18n();
   const [suspectId, setSuspectId] = useState('');
   const [motiveId, setMotiveId] = useState('');
@@ -111,14 +112,7 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
 
           {result?.explanation && (
             <div className="mt-5 flex items-start gap-3 rounded-md bg-black/[0.05] p-4 text-left">
-              {killer && (
-                <span
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full font-typewriter text-[16px]"
-                  style={{ background: `${killer.color}30`, color: '#2a1c10', border: `1.5px solid ${killer.color}` }}
-                >
-                  {initials(killer.name)}
-                </span>
-              )}
+              {killer && <Portrait suspect={killer} mood="nervous" size={56} rounded />}
               <p className="font-typed text-[15px] leading-[1.6] text-[#2f2216]">{result.explanation}</p>
             </div>
           )}
@@ -133,6 +127,11 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
                 <button className="btn text-[var(--ink-soft)] hover:bg-black/5" onClick={close}>
                   {t('acc.again')}
                 </button>
+                {result?.solution && onOpenDossier && (
+                  <button className="btn btn-ink" onClick={onOpenDossier}>
+                    <FileText size={15} /> {t('dossier.open')}
+                  </button>
+                )}
                 {result && (
                   <button className="btn btn-ink" onClick={shareResult}>
                     {copied ? <Check size={15} /> : <Copy size={15} />} {copied ? t('acc.shared') : t('acc.share')}
@@ -187,12 +186,7 @@ export const AccusationModal: React.FC<Props> = ({ mystery, room, result, onSubm
                       active ? 'border-[var(--blood-bright)] bg-blood/15' : 'border-[var(--line)] hover:border-[var(--line-strong)]'
                     }`}
                   >
-                    <span
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-typewriter text-[15px]"
-                      style={{ background: `${s.color}26`, color: s.color, border: `1px solid ${s.color}66` }}
-                    >
-                      {initials(s.name)}
-                    </span>
+                    <Portrait suspect={s} size={44} rounded />
                     <span className="min-w-0">
                       <span className="block text-[14px] font-semibold text-[var(--text)] leading-tight">{s.name}</span>
                       <span className="block text-[12px] text-[var(--text-faint)] truncate">{s.role}</span>

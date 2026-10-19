@@ -12,6 +12,8 @@ interface Props {
   onPhrase: (key: ChatPhraseKey) => void;
   /** Talking to the scripted assistant rather than a person */
   solo?: boolean;
+  /** Blackout: the line crackles */
+  noisy?: boolean;
 }
 
 const QUICK: ChatPhraseKey[] = ['need_info', 'found_something', 'agree', 'disagree', 'ready'];
@@ -40,7 +42,7 @@ export function renderMessage(msg: ChatMessage, mystery: Mystery, t: TFn): strin
   }
 }
 
-export const RadioChat: React.FC<Props> = ({ messages, me, mystery, onSend, onPhrase, solo }) => {
+export const RadioChat: React.FC<Props> = ({ messages, me, mystery, onSend, onPhrase, solo, noisy }) => {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -75,7 +77,10 @@ export const RadioChat: React.FC<Props> = ({ messages, me, mystery, onSend, onPh
     <section className="sheet absolute bottom-4 right-4 z-10 w-[min(360px,calc(100%-32px))] h-[min(480px,calc(100%-32px))] flex flex-col rounded-xl panel shadow-2xl overflow-hidden">
       <header className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5">
         <Radio size={16} className="text-[var(--blood-bright)]" />
-        <h2 className="flex-1 font-typewriter text-[16px] text-[var(--paper)]">{t('chat.title')}</h2>
+        <h2 className="flex-1 font-typewriter text-[16px] text-[var(--paper)]">
+          {t('chat.title')}
+          {noisy && <span className="radio-static ml-2 align-middle text-[11px] font-sans font-semibold text-[var(--text-faint)]">{t('radio.static')}</span>}
+        </h2>
         <button className="icon-btn h-8 w-8" onClick={() => setOpen(false)} aria-label={t('common.close')}>
           <ChevronDown size={17} />
         </button>

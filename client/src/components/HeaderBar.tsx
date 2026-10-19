@@ -127,7 +127,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             >
               <span className={`h-2 w-2 rounded-full ${player ? '' : 'opacity-40'}`} style={{ background: ROLE_COLORS[role] }} />
               <span className="max-w-[110px] truncate">{player ? player.name : t('header.waiting')}</span>
-              {player && player.socketId === me.socketId && <span className="text-[var(--text-faint)]">({t('header.you')})</span>}
+              {player && player.id === me.id && <span className="text-[var(--text-faint)]">({t('header.you')})</span>}
+              {player && !player.connected && <span className="animate-pulse text-[var(--text-faint)]">{t('header.reconnecting')}</span>}
               {player && player.lang !== lang && <span className="text-[10px] font-bold uppercase text-[var(--text-faint)]">{player.lang}</span>}
             </div>
           ))}

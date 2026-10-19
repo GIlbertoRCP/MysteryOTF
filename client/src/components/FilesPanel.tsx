@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { PanelLeftClose, PanelLeftOpen, Check, Pin, GripVertical, FlaskConical, Loader2 } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, Check, Pin, GripVertical, FlaskConical, Loader2, Map as MapIcon, Lock } from 'lucide-react';
 import { Difficulty, Evidence, LabState, Mystery, Player, Role } from '../types';
 import { useI18n, TKey } from '../i18n';
-import { ROLE_COLORS, initials } from '../cardInfo';
+import { ROLE_COLORS } from '../cardInfo';
+import { Portrait } from './Portrait';
 import { KindIcon, KIND_ORDER } from './KindIcon';
 import { useIsPhone } from '../utils/device';
 
@@ -19,6 +20,9 @@ interface FilesPanelProps {
   difficulty: Difficulty;
   tutorial: boolean;
   onRequestLab: (evidenceId: string) => void;
+  /** Recovered items found by searching the floor plan */
+  foundItems: Set<string>;
+  onOpenPlan: () => void;
 }
 
 const LAB_KINDS = ['autopsy', 'weapon', 'smudge', 'shoeprint', 'trace', 'scrapings'];
@@ -61,7 +65,7 @@ function useSeen(caseId: string) {
 }
 
 export const FilesPanel: React.FC<FilesPanelProps> = ({
-  mystery, me, pinnedRefs, onPin: pinEvidence, onPinSuspect: pinSuspect, onInspect, onOpenSuspects, lab, difficulty, tutorial, onRequestLab,
+  mystery, me, pinnedRefs, onPin: pinEvidence, onPinSuspect: pinSuspect, onInspect, onOpenSuspects, lab, difficulty, tutorial, onRequestLab, foundItems, onOpenPlan,
 }) => {
   const { t } = useI18n();
   const solo = !!lab;
@@ -85,7 +89,7 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
     mystery.evidence.filter(e => e.role === role).sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
   const tabRole: Role = tab === 'lab' ? 'analyst' : me.role;
   const mine = filesFor(tabRole);
-  const unseenIn = (role: Role) => filesFor(role).filter(e => !seen.has(e.id) && !isLocked(e)).length;
+  const unseenIn = (role: Role) => filesFor(role).filter(e => !seen.has(e.id) && !isLocked(e) && !(e.kind === 'weapon' && !foundItems.has(e.id))).length;
 
   // Anything already on the board counts as seen.
   useEffect(() => {
@@ -186,6 +190,28 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
             </p>
             <ul className="space-y-1">
               {mine.map(item => {
+                if (item.kind === 'weapon' && !foundItems.has(item.id)) {
+                  const roomIdx = item.spotId?.split('-')[1];
+                  const roomName = mystery.plan.rooms.find(r => r.id === `room-${roomIdx}`)?.label ?? '';
+                  return (
+                    <li key={item.id} className="rounded-md border border-dashed border-[var(--line)] px-2.5 py-2.5">
+                      <div className="flex gap-2.5">
+                        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/5 text-[var(--text-faint)]">
+                          <Lock size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11px] font-semibold text-[var(--text-faint)]">{t(`kind.${item.kind}` as TKey)} · {t('files.hidden')}</span>
+                          <span className="block text-[13px] leading-snug text-[var(--text-dim)]">{t('files.hiddenHint', { room: roomName })}</span>
+                        </span>
+                      </div>
+                      <div className="mt-2 pl-[38px]">
+                        <button onClick={onOpenPlan} className="btn btn-ghost px-2.5 py-1.5 text-[12px]">
+                          <MapIcon size={13} /> {t('files.openPlan')}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                }
                 if (isLocked(item)) {
                   const running = lab?.running?.id === item.id;
                   const secs = running ? Math.max(0, Math.ceil((lab!.running!.readyAt - now) / 1000)) : 0;
@@ -296,12 +322,7 @@ export const FilesPanel: React.FC<FilesPanelProps> = ({
                   onDragStart={(e) => e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ kind: 'suspect', refId: s.id }))}
                   className="flex items-center gap-2.5 rounded-md px-2 py-2 hover:bg-white/[0.03]"
                 >
-                  <span
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-typewriter text-[14px]"
-                    style={{ background: `${s.color}26`, color: s.color, border: `1px solid ${s.color}66` }}
-                  >
-                    {initials(s.name)}
-                  </span>
+                  <Portrait suspect={s} size={36} rounded />
                   <button onClick={onOpenSuspects} className="min-w-0 flex-1 text-left">
                     <span className="block text-[13.5px] font-semibold leading-tight text-[var(--text)] truncate">{s.name}</span>
                     <span className="block text-[12px] text-[var(--text-faint)] truncate">{s.role} · {s.alibiPlace}</span>

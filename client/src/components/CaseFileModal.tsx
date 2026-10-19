@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { X, Copy, Check } from 'lucide-react';
-import { Mystery, TraitDim } from '../types';
+import { X, Copy, Check, CloudLightning } from 'lucide-react';
+import { ConfrontEntry, Evidence, Mystery, TraitDim } from '../types';
+import { alibiStatuses } from '../alibi';
+import { AlibiStamp } from './InterrogationModal';
 import { useI18n, TKey } from '../i18n';
-import { initials } from '../cardInfo';
+import { Portrait } from './Portrait';
 
 interface Props {
   mystery: Mystery;
+  pinnedEvidence?: Evidence[];
+  confrontations?: ConfrontEntry[];
   onClose: () => void;
 }
 
@@ -35,11 +39,12 @@ function useStruck(caseId: string) {
   return { struck, toggle };
 }
 
-export const CaseFileModal: React.FC<Props> = ({ mystery, onClose }) => {
+export const CaseFileModal: React.FC<Props> = ({ mystery, pinnedEvidence = [], confrontations = [], onClose }) => {
   const { t } = useI18n();
   const [tab, setTab] = useState<'briefing' | 'suspects' | 'rules'>('briefing');
   const [copied, setCopied] = useState(false);
   const { struck, toggle } = useStruck(mystery.caseId);
+  const alibis = alibiStatuses(pinnedEvidence, confrontations);
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -71,6 +76,17 @@ export const CaseFileModal: React.FC<Props> = ({ mystery, onClose }) => {
               <article className="paper rounded-md p-6 sm:p-8">
                 <h3 className="font-typewriter text-[28px] leading-tight text-[var(--ink)] [text-wrap:balance]">{mystery.title}</h3>
                 <p className="mt-4 font-typed text-[16.5px] leading-[1.7] text-[#2f2216] max-w-[64ch]">{mystery.synopsis}</p>
+                {mystery.modifier && (
+                  <div className="mt-5 flex gap-3 rounded border-2 border-dashed border-[#7a1f2b]/60 px-4 py-3 text-[#3a1a12]">
+                    <CloudLightning size={20} className="mt-0.5 shrink-0 text-[#7a1f2b]" />
+                    <p className="text-[14.5px] leading-snug">
+                      <span className="block font-typewriter text-[13px] uppercase tracking-widest text-[#7a1f2b]">
+                        {t('mod.title')}: {mystery.modifier.label}
+                      </span>
+                      {mystery.modifier.note}
+                    </p>
+                  </div>
+                )}
               </article>
               <dl className="space-y-4 text-[14px]">
                 <Fact label={t('file.victim')}>
@@ -121,12 +137,7 @@ export const CaseFileModal: React.FC<Props> = ({ mystery, onClose }) => {
                         <tr key={s.id} className={`group transition-opacity ${isStruck ? 'opacity-45' : ''}`}>
                           <td className="sticky left-0 bg-[var(--bg-panel)] border-t border-[var(--line)] px-3 py-3 align-top">
                             <button onClick={() => toggle(s.id)} className="flex items-start gap-3 text-left" title={t('file.strike')}>
-                              <span
-                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-typewriter text-[15px]"
-                                style={{ background: `${s.color}26`, color: s.color, border: `1px solid ${s.color}66` }}
-                              >
-                                {initials(s.name)}
-                              </span>
+                              <Portrait suspect={s} size={44} rounded />
                               <span>
                                 <span className={`block font-semibold text-[var(--text)] ${isStruck ? 'line-through decoration-[var(--blood-bright)] decoration-2' : ''}`}>{s.name}</span>
                                 <span className="block text-[12.5px] text-[var(--text-faint)]">
@@ -136,7 +147,10 @@ export const CaseFileModal: React.FC<Props> = ({ mystery, onClose }) => {
                             </button>
                           </td>
                           <td className="border-t border-[var(--line)] px-3 py-3 align-top text-[var(--text-dim)] max-w-[220px]">
-                            <span className="block text-[var(--text)]">{s.alibiPlace}</span>
+                            <span className="flex flex-wrap items-center gap-2">
+                              <span className={`text-[var(--text)] ${alibis[s.id] === 'broken' ? 'line-through decoration-[var(--blood-bright)] decoration-2' : ''}`}>{s.alibiPlace}</span>
+                              <AlibiStamp status={alibis[s.id] ?? null} small />
+                            </span>
                             <span className="block text-[12.5px] leading-snug">{s.bio}</span>
                           </td>
                           {DIMS.map(d => (
@@ -157,7 +171,7 @@ export const CaseFileModal: React.FC<Props> = ({ mystery, onClose }) => {
           {tab === 'rules' && (
             <div className="p-5 sm:p-8 max-w-[70ch]">
               <ul className="space-y-4 text-[15.5px] leading-relaxed text-[var(--text-dim)]">
-                {(['file.rule1', 'file.rule2', 'file.rule6', 'file.rule3', 'file.rule4', 'file.rule5'] as TKey[]).map(k => (
+                {(['file.rule1', 'file.rule2', 'file.rule6', 'file.rule7', 'file.rule3', 'file.rule4', 'file.rule5'] as TKey[]).map(k => (
                   <li key={k} className="flex gap-3">
                     <span className="mt-[10px] h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--blood-bright)]" />
                     <span>{t(k)}</span>

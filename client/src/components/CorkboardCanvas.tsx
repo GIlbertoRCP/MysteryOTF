@@ -1,15 +1,16 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Group, Rect, Text, Line, Circle, Path } from 'react-konva';
+import { Stage, Layer, Group, Rect, Text, Line, Circle, Path, Image as KonvaImage } from 'react-konva';
 import Konva from 'konva';
 import { isCoarsePointer, useIsPhone } from '../utils/device';
 
 // Lets a second finger start a pinch while the first is dragging.
 Konva.hitOnDragEnabled = true;
 import { StickyNote, ZoomIn, ZoomOut, Maximize, Search, Spline, Trash2, X, Link2 } from 'lucide-react';
-import { BoardCard, BoardStyle, CardKind, Mystery, Player, Role, Room, StatusTag, StringLabel } from '../types';
+import { BoardCard, BoardStyle, CardKind, ConfrontEntry, Mystery, Player, Role, Room, StatusTag, StringLabel } from '../types';
 import { useI18n, TKey } from '../i18n';
 import { CARD_SIZE, QUESTION_IDS, QUESTION_SIZE, QuestionId, pinPoint, questionPos } from '../boardLayout';
-import { ROLE_COLORS, STRING_COLORS, initials } from '../cardInfo';
+import { ROLE_COLORS, STRING_COLORS } from '../cardInfo';
+import { moodFor, portraitUrl } from './Portrait';
 import { StringTagModal } from './StringTagModal';
 import { DRAG_MIME } from './FilesPanel';
 import { inviteLink } from '../App';
@@ -42,6 +43,8 @@ interface Props {
   extraTools?: React.ReactNode;
   /** Dark board lit only around each player's cursor */
   flashlight?: boolean;
+  /** Confrontations so far; a rattled suspect looks nervous in their photo */
+  confrontations?: ConfrontEntry[];
 }
 
 const FONT_TYPE = 'Special Elite';
@@ -57,7 +60,7 @@ const TAG_STYLE: Record<StatusTag, { color: string }> = {
 export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref) => {
   const {
     room, mystery, me, partner, solo, boardStyle, partnerCursor, onMoveCard, onDropFile, onAddNote, onTag, onRemove,
-    onCreateString, onDeleteString, onInspect, onCursor, onCopied, extraTools, flashlight,
+    onCreateString, onDeleteString, onInspect, onCursor, onCopied, extraTools, flashlight, confrontations = [],
   } = props;
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +85,19 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
   const coarse = useMemo(() => isCoarsePointer(), []);
   const pinch = useRef<{ dist: number; center: { x: number; y: number } } | null>(null);
   const [light, setLight] = useState<{ x: number; y: number } | null>(null);
+  // Portrait images for the polaroids, decoded once and reused.
+  const images = useRef(new Map<string, HTMLImageElement>());
+  const [, setImagesLoaded] = useState(0);
+  const imageFor = (url: string) => {
+    let img = images.current.get(url);
+    if (!img) {
+      img = new window.Image();
+      img.onload = () => setImagesLoaded(n => n + 1);
+      img.src = url;
+      images.current.set(url, img);
+    }
+    return img.complete && img.naturalWidth ? img : undefined;
+  };
 
   const cards = room.cards;
   const cardList = useMemo(() => Object.values(cards), [cards]);
@@ -320,10 +336,11 @@ export const CorkboardCanvas = forwardRef<CorkboardCanvasRef, Props>((props, ref
       <>
         <Rect width={w} height={h} fill="#f7f3ea" cornerRadius={2} shadowColor="black" shadowBlur={16} shadowOpacity={0.6} shadowOffsetY={8} />
         <Rect x={12} y={12} width={w - 24} height={146} fill="#1c2129" />
-        <Rect x={12} y={12} width={w - 24} height={146} fillRadialGradientStartPoint={{ x: (w - 24) / 2, y: 50 }} fillRadialGradientEndPoint={{ x: (w - 24) / 2, y: 50 }} fillRadialGradientStartRadius={0} fillRadialGradientEndRadius={110} fillRadialGradientColorStops={[0, `${s.color}66`, 1, 'rgba(0,0,0,0)']} />
-        <Circle x={w / 2} y={72} radius={27} fill="#0f1217" />
-        <Path x={w / 2 - 52} y={100} data="M0 58 C 4 22, 30 8, 52 8 C 74 8, 100 22, 104 58 Z" fill="#0f1217" />
-        <Text x={12} y={60} width={w - 24} align="center" text={initials(s.name)} fontFamily={FONT_TYPE} fontSize={20} fill={s.color} opacity={0.9} />
+        {(() => {
+          const img = imageFor(portraitUrl(s, moodFor(s.id, confrontations, card.statusTag === 'prime_suspect')));
+          // The portrait is drawn at 240×280; crop it to the photo area's shape.
+          return img ? <KonvaImage image={img} x={12} y={12} width={w - 24} height={146} crop={{ x: 0, y: 8, width: 240, height: 240 * (146 / (w - 24)) }} /> : null;
+        })()}
         <Text x={14} y={166} width={w - 28} text={s.name} fontFamily={FONT_HAND} fontSize={13.5} fill="#1d2a3a" wrap="word" ellipsis height={36} lineHeight={1.15} />
         <Text x={14} y={206} width={w - 28} text={s.role} fontFamily={FONT_TYPED} fontSize={11} fill="#5b4631" ellipsis wrap="none" />
       </>

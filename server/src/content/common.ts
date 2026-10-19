@@ -103,6 +103,8 @@ export interface Motive {
   docSummary: T;
   doc: T;
   deflect: T;
+  /** What they admit when confronted with the document */
+  admit: T;
 }
 
 export const MOTIVES: Motive[] = [
@@ -119,6 +121,10 @@ export const MOTIVES: Motive[] = [
       'We argued about family money from time to time. Every family does.',
       'De vez en cuando discutíamos por dinero de la familia. Como en todas las familias.'
     ),
+    admit: t(
+      'Fine. Yes, I knew about the new will. I was furious. But being angry isn\'t a crime.',
+      'Está bien. Sí, sabía lo del nuevo testamento. Me sentó fatal. Pero enfadarse no es un delito.'
+    ),
   },
   {
     key: 'debt',
@@ -132,6 +138,10 @@ export const MOTIVES: Motive[] = [
     deflect: t(
       'We had a small financial arrangement. Perfectly friendly, I assure you.',
       'Teníamos un pequeño acuerdo económico. Totalmente amistoso, se lo aseguro.'
+    ),
+    admit: t(
+      'All right, I owed {victim} more than I could ever pay. That doesn\'t make me a killer.',
+      'De acuerdo, le debía a {victim} más de lo que podré pagar nunca. Eso no significa que yo haya hecho esto.'
     ),
   },
   {
@@ -147,6 +157,10 @@ export const MOTIVES: Motive[] = [
       'I paid {victim} a visit now and then. Social calls. Nothing more.',
       'Visitaba a {victim} de vez en cuando. Visitas sociales, nada más.'
     ),
+    admit: t(
+      'Yes, {victim} was bleeding me dry. I won\'t pretend I\'m sorry it\'s over.',
+      'Sí, {victim} me estaba desangrando. No voy a fingir que lamento que se haya acabado.'
+    ),
   },
   {
     key: 'affair',
@@ -160,6 +174,10 @@ export const MOTIVES: Motive[] = [
     deflect: t(
       'We were close once. That was a long time ago.',
       'Una vez fuimos muy cercanos. Hace mucho tiempo de eso.'
+    ),
+    admit: t(
+      'We were together, and it ended badly. I said things I regret. That\'s all.',
+      'Estuvimos juntos y terminó mal. Dije cosas de las que me arrepiento. Eso es todo.'
     ),
   },
   {
@@ -175,6 +193,10 @@ export const MOTIVES: Motive[] = [
       'I admired {victim}’s work. Everyone did.',
       'Yo admiraba el trabajo de {victim}. Todo el mundo lo hacía.'
     ),
+    admit: t(
+      'That work was mine. {victim} stole it, and everyone applauded. You\'d be bitter too.',
+      'Ese trabajo era mío. {victim} lo robó y todos aplaudieron. A usted también le dolería.'
+    ),
   },
   {
     key: 'dismissal',
@@ -188,6 +210,10 @@ export const MOTIVES: Motive[] = [
     deflect: t(
       'My position was secure. {victim} relied on me completely.',
       'Mi puesto estaba asegurado. {victim} confiaba en mí por completo.'
+    ),
+    admit: t(
+      'I knew the letter was coming. I was going to fight it, not kill anyone over it.',
+      'Sabía que venía esa carta. Iba a pelearla, no a matar a nadie por ella.'
     ),
   },
   {
@@ -203,6 +229,10 @@ export const MOTIVES: Motive[] = [
       'The past is the past. I have no quarrel with anyone.',
       'El pasado, pasado está. No tengo problemas con nadie.'
     ),
+    admit: t(
+      'My father died in that prison because of {victim}. I\'ve hated them for twenty years. Hating isn\'t killing.',
+      'Mi padre murió en esa cárcel por culpa de {victim}. Llevo veinte años odiando a {victim}. Odiar no es matar.'
+    ),
   },
   {
     key: 'fraud',
@@ -216,6 +246,10 @@ export const MOTIVES: Motive[] = [
     deflect: t(
       '{victim} and I respected each other. Ask anyone.',
       '{victim} y yo nos respetábamos. Pregúntele a cualquiera.'
+    ),
+    admit: t(
+      'So {victim} found me out. I was going to disappear quietly, not do this.',
+      'Así que {victim} me descubrió. Pensaba desaparecer sin hacer ruido, no hacer esto.'
     ),
   },
 ];
@@ -393,6 +427,50 @@ export const TEXT = {
   hintSlip: t('Ask the remaining suspects how they heard about the death. Listen for details nobody should know yet.', 'Pregunten a los sospechosos restantes cómo se enteraron de la muerte. Atentos a detalles que nadie debería conocer aún.'),
   hintMotive: t('Once you know who did it, look for the document that names them. That is the motive.', 'Cuando sepan quién fue, busquen el documento que lo nombra. Ese es el móvil.'),
 
+  // Confrontations
+  confrontAccomplice: t(
+    'All right. I wasn’t with {killer}. I was in {receiptPlace}. I said otherwise because I was asked to.',
+    'Está bien. No estaba con {killer}. Estaba en {receiptPlace}. Dije lo contrario porque me lo pidieron.'
+  ),
+  confrontSighting: t(
+    'Exactly. I was in {place}, talking to {witness}. I couldn’t have been anywhere near {scene}.',
+    'Exacto. Estaba en {place}, hablando con {witness}. No pude estar ni cerca de {scene}.'
+  ),
+  confrontPlanted: t(
+    'That’s mine, but I lost it days ago. Someone wants you looking at me instead of them.',
+    'Es mío, pero lo perdí hace días. Alguien quiere que me miren a mí en vez de a ellos.'
+  ),
+  confrontClaim: t(
+    'That’s a lie. Everyone in {place} saw me there all evening. Check their record.',
+    'Eso es mentira. Todos en {place} me vieron allí toda la noche. Revisen su registro.'
+  ),
+  confrontSlip: t(
+    'How did I know how it happened? I... someone must have said it. Everyone was talking.',
+    '¿Cómo sabía cómo ocurrió? Yo... alguien lo diría. Todo el mundo hablaba.'
+  ),
+  deflect0: t('That proves nothing.', 'Eso no demuestra nada.'),
+  deflect1: t('I don’t see what that has to do with me.', 'No veo qué tiene eso que ver conmigo.'),
+  deflect2: t('Are we finished here, detective?', '¿Hemos terminado, detective?'),
+
+  // Planted evidence
+  plantedTitle: t('Monogrammed {item} by the body', '{itemCap} con monograma junto al cuerpo'),
+  plantedSummary: t('Embroidered with the initials {initials}.', 'Bordado con las iniciales {initials}.'),
+  plantedDetails: t(
+    '{itemFull} embroidered with the initials {initials}, found beside the body. Under the lab lamp it is spotless: no trace of the victim and none of the dust on the floor. It was placed there after the death.',
+    '{itemFull} bordado con las iniciales {initials}, encontrado junto al cuerpo. Bajo la lámpara del laboratorio está impecable: ni rastro de la víctima ni del polvo del suelo. Lo dejaron allí después de la muerte.'
+  ),
+
+  // False witness
+  claimTitle: t('Statement: {witness} accuses {name}', 'Declaración: {witness} acusa a {name}'),
+  claimSummary: t('Claims to have seen {name} leaving {scene}.', 'Dice haber visto a {name} salir de {scene}.'),
+  claimDetails: t(
+    '{witness} swears they saw {name} hurrying out of {scene} at {time}, and is very sure of it. Nobody else saw the same thing.',
+    '{witness} jura haber visto a {name} salir deprisa de {scene} a las {time}, y no tiene ninguna duda. Nadie más vio lo mismo.'
+  ),
+
+  // A late lead
+  lateNote: t('New lead', 'Nueva pista'),
+
   explanationAccomplice: t(
     ' {accomplice} lied to give them an alibi, but a receipt put {accomplice} in {receiptPlace} at the time.',
     ' {accomplice} mintió para darle una coartada, pero un recibo situaba a {accomplice} en {receiptPlace} a esa hora.'
@@ -403,5 +481,121 @@ export const TEXT = {
     '{killer} mató a {victim} con {weapon}. Móvil: {motive}. Dijo estar en {place}, pero nadie allí pudo confirmarlo.'
   ),
 };
+
+// ─── Case modifiers ──────────────────────────────────────────────────────────
+
+export type ModifierKey = 'blackout' | 'storm' | 'tampered';
+
+export const MODIFIERS: Record<ModifierKey, { label: T; note: T }> = {
+  blackout: {
+    label: t('Blackout', 'Apagón'),
+    note: t(
+      'At {time} the power failed across the whole building. Every camera went dark and nobody could see their own hands.',
+      'A las {time} se cortó la luz en todo el edificio. Todas las cámaras se apagaron y nadie veía ni sus propias manos.'
+    ),
+  },
+  storm: {
+    label: t('Storm', 'Tormenta'),
+    note: t(
+      'A storm raged all night. The rain washed out every footprint anywhere near the scene.',
+      'Una tormenta azotó toda la noche. La lluvia borró cualquier pisada cerca de la escena.'
+    ),
+  },
+  tampered: {
+    label: t('Tampered evidence', 'Pruebas manipuladas'),
+    note: t(
+      'Someone got to the evidence before the police did. Not everything is what it looks like.',
+      'Alguien llegó a las pruebas antes que la policía. No todo es lo que parece.'
+    ),
+  },
+};
+
+export const TAMPERED_NOTE = t(
+  'There is a dark red smear on it that looks like blood. The lab says otherwise: it is {fake}. Someone wanted this to look used.',
+  'Tiene una mancha rojo oscuro que parece sangre. El laboratorio dice otra cosa: es {fake}. Alguien quería que pareciera usado.'
+);
+export const FAKE_BLOOD: T[] = [t('red paint', 'pintura roja'), t('stage blood', 'sangre de teatro'), t('red wine', 'vino tinto'), t('beetroot juice', 'zumo de remolacha')];
+
+// ─── Searchable spots in each room ───────────────────────────────────────────
+
+export const SPOTS: { name: T; label: T }[] = [
+  { name: t('the desk drawer', 'el cajón del escritorio'), label: t('Desk drawer', 'Cajón del escritorio') },
+  { name: t('the wastebasket', 'la papelera'), label: t('Wastebasket', 'Papelera') },
+  { name: t('the window', 'la ventana'), label: t('Window', 'Ventana') },
+  { name: t('the cupboard', 'el armario'), label: t('Cupboard', 'Armario') },
+  { name: t('the rug', 'la alfombra'), label: t('Rug', 'Alfombra') },
+  { name: t('the bookshelf', 'la estantería'), label: t('Bookshelf', 'Estantería') },
+  { name: t('the coat rack', 'el perchero'), label: t('Coat rack', 'Perchero') },
+  { name: t('the sofa cushions', 'los cojines del sofá'), label: t('Sofa', 'Sofá') },
+];
+
+export const SPOT_NOTHING: T[] = [
+  t('Nothing here but dust.', 'Aquí no hay más que polvo.'),
+  t('An old ticket stub and a broken pencil. Nothing useful.', 'Una entrada vieja y un lápiz roto. Nada útil.'),
+  t('A half-finished letter that has nothing to do with the case.', 'Una carta a medio escribir que no tiene nada que ver con el caso.'),
+  t('The latch is fastened from the inside. Nobody came in this way.', 'El pestillo está echado por dentro. Nadie entró por aquí.'),
+  t('Someone searched this before you: everything is slightly out of place.', 'Alguien registró esto antes: todo está un poco fuera de sitio.'),
+  t('A cold cup of coffee. Whoever left it left in a hurry.', 'Una taza de café frío. Quien la dejó se fue con prisa.'),
+  t('Old scratches on the floor. They were here long before tonight.', 'Arañazos viejos en el suelo. Estaban ahí mucho antes de esta noche.'),
+  t('A mouse runs for cover. Nothing else.', 'Un ratón corre a esconderse. Nada más.'),
+];
+
+export const SPOT_SCENE: T[] = [
+  t('Chalk marks on the floor show where the body lay.', 'Unas marcas de tiza en el suelo muestran dónde estaba el cuerpo.'),
+  t('A chair has been knocked over. There was a struggle, but a short one.', 'Hay una silla volcada. Hubo forcejeo, pero breve.'),
+];
+
+export const SPOT_FOUND = t('In {spot} you find {weapon}.', 'En {spot} encuentran {weapon}.');
+
+// ─── Follow-up questions unlocked by cracking a suspect ─────────────────────
+
+export const FOLLOW_UP = {
+  qMore: t('Is there anything else you haven’t told us?', '¿Hay algo más que no nos haya contado?'),
+  qWho: t('Then who do you think did it?', 'Entonces, ¿quién cree que fue?'),
+  qWhy: t('Why did you cover for them?', '¿Por qué le encubrió?'),
+  qHeard: t('Who told you how they died?', '¿Quién le dijo cómo murió?'),
+  aWhy: t(
+    '{killer} swore they would ruin me if I didn’t. I was afraid.',
+    '{killer} juró que me arruinaría si no lo hacía. Tenía miedo.'
+  ),
+  aHeard: t('I... don’t remember. I’d like to speak to a lawyer now.', 'No... no me acuerdo. Quiero hablar con un abogado.'),
+  aFrame: t('If I were you, I’d take a closer look at {other}.', 'Yo que usted miraría más de cerca a {other}.'),
+  seen: {
+    height: t('Now that I think about it, I saw a {value} figure slip past the door of {scene}.', 'Ahora que lo pienso, vi una figura {value} pasar junto a la puerta de {scene}.'),
+    coat: t('Someone in a {value} coat hurried past me in the corridor.', 'Alguien con un abrigo {value} pasó deprisa a mi lado en el pasillo.'),
+    voice: t('I heard a {value} voice arguing with the victim earlier.', 'Antes oí una voz {value} discutiendo con la víctima.'),
+    hand: t('I noticed whoever went in used their {value} hand on the door.', 'Me fijé en que quien entró usó la mano {value} en la puerta.'),
+    footwear: t('I heard {value} on the floor outside, going fast.', 'Oí {value} en el suelo de fuera, a toda prisa.'),
+    habit: t('There was {value} on the floor outside {scene}.', 'Había {value} en el suelo, a la salida de {scene}.'),
+  },
+};
+
+// ─── What really happened (shown after the verdict) ──────────────────────────
+
+export const STORY = {
+  meeting: t('{victim} goes to {scene} for a meeting that couldn’t wait.', '{victim} va a {scene} a una reunión que no podía esperar.'),
+  powerCut: t('The power fails. Every camera goes dark.', 'Se va la luz. Todas las cámaras se apagan.'),
+  leaves: t('{killer} slips out of {claimed}.', '{killer} sale a escondidas de {claimed}.'),
+  witness: t('{witness} glimpses {killer} hurrying out of {scene}.', '{witness} ve de refilón a {killer} saliendo deprisa de {scene}.'),
+  camera: t('{source} catches {killer} near {scene}, face turned away.', '{source} capta a {killer} cerca de {scene}, de espaldas.'),
+  phone: t('{killer} makes a short call near {scene} and hangs up without a name.', '{killer} hace una llamada breve cerca de {scene} y cuelga sin dar su nombre.'),
+  murder: t('{killer} kills {victim} with {weapon}. The watch breaks in the fall.', '{killer} mata a {victim} con {weapon}. El reloj se rompe en la caída.'),
+  hides: t('{killer} leaves {weapon} in {place}.', '{killer} deja {weapon} en {place}.'),
+  tampers: t('To muddy the trail, {killer} smears {fake} on {decoy}.', 'Para despistar, {killer} mancha {decoy} con {fake}.'),
+  plants: t('{killer} drops {innocent}’s {item} by the body to frame them.', '{killer} deja junto al cuerpo el {item} de {innocent} para incriminarle.'),
+  sighting: t('{innocent} is in {place} talking to {witness}, far from {scene}.', '{innocent} está en {place} hablando con {witness}, lejos de {scene}.'),
+  receipt: t('{accomplice} is really in {place}, signing a receipt.', '{accomplice} está en realidad en {place}, firmando un recibo.'),
+  accomplice: t('{accomplice} agrees to swear they were with {killer} all evening.', '{accomplice} acepta jurar que estuvo con {killer} toda la noche.'),
+  claim: t('{witness} later accuses {innocent}. It’s a lie: {witness} owed {killer} a favour.', 'Más tarde, {witness} acusa a {innocent}. Es mentira: {witness} le debía un favor a {killer}.'),
+  returns: t('{killer} walks back into {claimed} as if nothing had happened.', '{killer} vuelve a {claimed} como si no hubiera pasado nada.'),
+};
+
+/** Personal items that can be planted at the scene. `full` starts a sentence. */
+export const PLANTED_ITEMS: { name: T; cap: T; full: T }[] = [
+  { name: t('handkerchief', 'pañuelo'), cap: t('Handkerchief', 'Pañuelo'), full: t('A silk handkerchief', 'Un pañuelo de seda') },
+  { name: t('glove', 'guante'), cap: t('Glove', 'Guante'), full: t('A leather glove', 'Un guante de cuero') },
+  { name: t('cufflink', 'gemelo'), cap: t('Cufflink', 'Gemelo'), full: t('A silver cufflink', 'Un gemelo de plata') },
+  { name: t('cigarette case', 'pitillero'), cap: t('Cigarette case', 'Pitillero'), full: t('An engraved cigarette case', 'Un pitillero grabado') },
+];
 
 export const NOTICED_TRUE_DIMS: TraitDim[] = ['habit'];

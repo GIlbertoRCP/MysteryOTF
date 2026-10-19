@@ -403,3 +403,76 @@ html {
   transform: scale(1.07);
   filter: blur(2.5px) saturate(0.75);
 }
+
+/* Unsearched spots on the floor plan breathe gently */
+.plan-spot-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: spot-pulse 1.8s ease-in-out infinite;
+}
+@keyframes spot-pulse {
+  50% { transform: scale(1.45); opacity: 0.45; }
+}
+
+@layer components {
+  .heartbeat { animation: heartbeat 1s ease-in-out infinite; }
+  .crack-hit { animation: crack-hit 0.6s ease-out; border-radius: 9999px; }
+}
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.3); }
+  30% { transform: scale(1); }
+  45% { transform: scale(1.18); }
+}
+@keyframes crack-hit {
+  0% { transform: translateX(0); box-shadow: 0 0 0 0 rgba(220, 60, 50, 0.9); }
+  15% { transform: translateX(-6px) rotate(-3deg); }
+  30% { transform: translateX(6px) rotate(3deg); }
+  45% { transform: translateX(-4px); }
+  60% { transform: translateX(3px); }
+  100% { transform: translateX(0); box-shadow: 0 0 0 18px rgba(220, 60, 50, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .heartbeat, .crack-hit { animation: none; }
+}
+
+/* Accusation sequence: the room goes dark and a single light finds the accused */
+.seq-dim { background: rgba(4, 3, 2, 0.88); animation: seq-dim 0.9s ease-out both; }
+.seq-spot { background: radial-gradient(ellipse 45% 55% at 50% 30%, rgba(255, 214, 150, 0.12), transparent 70%); }
+.seq-rise { animation: seq-rise 0.9s var(--ease-out) both; }
+.seq-slam { animation: seq-slam 0.38s var(--ease-out) both; }
+.seq-verdict { animation: seq-slam 0.45s var(--ease-out) both; }
+.seq-objection { animation: seq-objection 0.5s ease-out both; text-shadow: 0 0 30px rgba(220, 60, 50, 0.55); }
+@keyframes seq-dim { from { background: rgba(4, 3, 2, 0); } }
+@keyframes seq-rise { from { opacity: 0; transform: translateY(14px); } }
+@keyframes seq-slam { from { opacity: 0; transform: scale(1.12) translateY(-6px); } }
+@keyframes seq-objection {
+  0% { opacity: 0; transform: scale(2.2) rotate(-6deg); }
+  60% { opacity: 1; transform: scale(0.95) rotate(-3deg); }
+  100% { transform: scale(1) rotate(-3deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .seq-dim, .seq-rise, .seq-slam, .seq-verdict, .seq-objection { animation: none; }
+}
+
+/* Printing the dossier: only the dossier, on plain paper */
+@media print {
+  body:has(.dossier-print-root) > *:not(.dossier-print-root) { display: none !important; }
+  .dossier-print-root { position: static !important; display: block !important; background: none !important; backdrop-filter: none !important; padding: 0 !important; }
+  .dossier-sheet { max-height: none !important; overflow: visible !important; box-shadow: none !important; max-width: none !important; animation: none !important; transform: none !important; }
+  .dossier-actions { display: none !important; }
+  body { background: #fff !important; }
+}
+
+/* Blackout: the radio crackles */
+.radio-static { animation: radio-static 2.4s steps(1) infinite; }
+@keyframes radio-static {
+  0%, 100% { opacity: 0.9; }
+  12% { opacity: 0.35; }
+  14% { opacity: 0.9; }
+  51% { opacity: 0.5; }
+  53% { opacity: 0.9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .radio-static { animation: none; }
+}

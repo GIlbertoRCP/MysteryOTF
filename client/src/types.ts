@@ -20,6 +20,8 @@ export type EvidenceKind =
   | 'scrapings'
   | 'receipt'
   | 'sighting'
+  | 'planted'
+  | 'claim'
   | 'weapon';
 
 export interface Suspect {
@@ -31,6 +33,7 @@ export interface Suspect {
   bio: string;
   alibiPlace: string;
   alibiRoomId: string;
+  look: 'f' | 'm';
   alibiStatement: string;
   traits: Record<TraitDim, string>;
   traitKeys: Record<TraitDim, string>;
@@ -47,6 +50,9 @@ export interface Evidence {
   event?: { min: number; roomId?: string; suspectId?: string };
   puzzle?: Puzzle;
   weapon?: { key: string; residue: boolean };
+  spotId?: string;
+  confirms?: string[];
+  model?: { type: 'watch'; min: number; engraving: string } | { type: 'monogram'; item: string; initials: string } | { type: 'letter'; seal: string };
 }
 
 export type Puzzle =
@@ -67,6 +73,7 @@ export interface PlanRoom {
   h: number;
   door: { x: number; y: number };
   walk: number;
+  spots: { id: string; label: string }[];
 }
 
 export interface Plan {
@@ -94,6 +101,7 @@ export interface Mystery {
     windowEnd: number;
   };
   plan: Plan;
+  modifier: { key: 'blackout' | 'storm' | 'tampered'; label: string; note: string } | null;
   synopsis: string;
   suspects: Suspect[];
   evidence: Evidence[];
@@ -129,10 +137,12 @@ export interface BoardString {
 }
 
 export interface Player {
+  id: string;
   socketId: string;
   name: string;
   role: Role;
   lang: Lang;
+  connected: boolean;
 }
 
 export type ChatPhraseKey =
@@ -185,6 +195,26 @@ export interface Room {
   maxHints: number;
   score: number | null;
   finishedAt: number | null;
+  wastedConfronts: number;
+}
+
+export interface ConfrontEntry {
+  suspectId: string;
+  evidenceId: string;
+  by: string;
+  kind: 'admit' | 'cleared' | 'confess' | 'slip' | 'deflect';
+  cracked: boolean;
+  line: string;
+  followUp?: { q: string; a: string };
+  at: number;
+}
+
+export interface SearchEntry {
+  spotId: string;
+  by: string;
+  text: string;
+  found: string[];
+  at: number;
 }
 
 export interface AccusationSubmission {
@@ -213,6 +243,12 @@ export interface AccusationResult {
   score?: number;
   elapsedMs?: number;
   hintsUsed: number;
+  story?: { min: number; text: string }[];
+  wastedConfronts?: number;
+  spotsSearched?: number;
+  submission?: AccusationSubmission;
+  /** Innocents the killer tried to pin it on (planted item or a pointed finger) */
+  framedIds?: string[];
 }
 
 export type BoardStyle = 'mindplace' | 'corkboard' | 'blackboard' | 'blueprint';

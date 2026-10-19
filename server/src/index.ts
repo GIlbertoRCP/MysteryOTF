@@ -4,7 +4,7 @@ import { Server, Socket } from 'socket.io';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { roomManager } from './roomManager.js';
+import { roomManager, Room, LATE_LEAD_MS } from './roomManager.js';
 import { AccusationSubmission, Lang, Role } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,81 +24,110 @@ const clientDistPath = path.join(__dirname, '../../client/dist');
 app.use(express.static(clientDistPath));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', durable: roomManager.durable, timestamp: new Date().toISOString() });
 });
 
 const asLang = (l: unknown): Lang => (l === 'es' ? 'es' : 'en');
 const asRole = (r: unknown): Role => (r === 'analyst' ? 'analyst' : 'lead');
+const asPlayerId = (id: unknown, socket: Socket): string =>
+  typeof id === 'string' && /^[\w-]{8,64}$/.test(id) ? id : `anon-${socket.id}`;
 
 function currentRoom(socket: Socket) {
   const code = socket.data.roomCode as string | undefined;
   return code ? roomManager.getRoom(code) : undefined;
 }
 
-type RoomT = NonNullable<ReturnType<typeof roomManager.getRoom>>;
+function currentPlayer(socket: Socket) {
+  const room = currentRoom(socket);
+  const player = room?.players[socket.data.playerId as string];
+  return room && player ? { room, player } : null;
+}
 
-function botSay(room: RoomT, key: Parameters<typeof roomManager.botSay>[1], ref?: string, index?: number) {
+function broadcastPlayers(room: Room, extra: Record<string, unknown> = {}) {
+  io.to(room.code).emit('room:players', { players: Object.values(room.players), ...extra });
+}
+
+function botSay(room: Room, key: Parameters<typeof roomManager.botSay>[1], ref?: string, index?: number) {
   io.to(room.code).emit('chat:message', roomManager.botSay(room, key, ref, index));
 }
 
-function sendHints(room: RoomT) {
+function sendHints(room: Room) {
   for (const p of Object.values(room.players)) {
-    io.to(p.socketId).emit('case:hints', { hints: roomManager.hintsFor(room, p.lang), hintsUsed: room.hintsUsed });
+    if (p.connected) io.to(p.socketId).emit('case:hints', { hints: roomManager.hintsFor(room, p.lang), hintsUsed: room.hintsUsed });
   }
 }
 
-function enterRoom(socket: Socket, code: string, name: string, role: Role, lang: Lang) {
-  const room = roomManager.getRoom(code);
+roomManager.onLabDone = (room) => {
+  io.to(room.code).emit('lab:update', { lab: room.lab });
+  if (room.assistant) botSay(room, 'bot_lab_ready', room.lab!.unlocked[room.lab!.unlocked.length - 1]);
+};
+
+roomManager.onPlayerGone = (room, player) => {
+  broadcastPlayers(room, { left: player.name });
+};
+
+async function enterRoom(socket: Socket, code: string, playerId: string, name: string, role: Role, lang: Lang) {
+  const room = await roomManager.loadRoom(code);
   if (!room) {
     socket.emit('room:error', { code: 'not_found' });
     return;
   }
-  if (roomManager.isFull(room)) {
+  if (roomManager.isFull(room, playerId)) {
     socket.emit('room:error', { code: 'solo' });
     return;
   }
-  const player = roomManager.addPlayer(room, socket.id, name, role, lang);
+  const { player, rejoined } = roomManager.addPlayer(room, playerId, socket.id, name, role, lang);
   socket.data.roomCode = room.code;
+  socket.data.playerId = player.id;
   socket.join(room.code);
 
-  console.log(`[Room] ${player.name} joined ${room.code} as ${player.role} (${player.lang})`);
+  console.log(`[Room] ${player.name} ${rejoined ? 'rejoined' : 'joined'} ${room.code} as ${player.role} (${player.lang})`);
 
   socket.emit('room:joined', {
     room: roomManager.toPublic(room),
     mystery: roomManager.getMystery(room, player.lang),
     hints: roomManager.hintsFor(room, player.lang),
+    confrontations: roomManager.confrontationsFor(room, player.lang),
+    searches: roomManager.searchesFor(room, player.lang),
     you: player,
   });
-  socket.to(room.code).emit('room:players', { players: Object.values(room.players), joined: player.name });
+  socket.to(room.code).emit('room:players', {
+    players: Object.values(room.players),
+    ...(rejoined ? { returned: player.name } : { joined: player.name }),
+  });
   if (room.assistant && room.chat.length === 0) setTimeout(() => botSay(room, 'bot_hello'), 1500);
 }
 
 io.on('connection', (socket) => {
-  socket.on('room:create', ({ name, role, lang, theme, difficulty, seed, mode, assistant, tutorial, daily }) => {
-    const room = roomManager.createRoom({ theme, difficulty, seed, mode, assistant, tutorial, daily });
-    enterRoom(socket, room.code, name, asRole(role), asLang(lang));
+  socket.on('room:create', async ({ playerId, name, role, lang, theme, difficulty, seed, mode, assistant, tutorial, daily }) => {
+    const room = await roomManager.createRoom({ theme, difficulty, seed, mode, assistant, tutorial, daily });
+    await enterRoom(socket, room.code, asPlayerId(playerId, socket), name, asRole(role), asLang(lang));
   });
 
-  socket.on('room:join', ({ code, name, role, lang }) => {
-    enterRoom(socket, String(code || ''), name, asRole(role), asLang(lang));
+  socket.on('room:join', async ({ code, playerId, name, role, lang }) => {
+    await enterRoom(socket, String(code || ''), asPlayerId(playerId, socket), name, asRole(role), asLang(lang));
   });
 
   socket.on('room:set_lang', ({ lang }) => {
-    const room = currentRoom(socket);
-    if (!room) return;
-    roomManager.setLang(room, socket.id, asLang(lang));
-    socket.emit('room:mystery', { mystery: roomManager.getMystery(room, asLang(lang)), hints: roomManager.hintsFor(room, asLang(lang)) });
-    io.to(room.code).emit('room:players', { players: Object.values(room.players) });
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    roomManager.setLang(cur.room, cur.player.id, asLang(lang));
+    socket.emit('room:mystery', {
+      mystery: roomManager.getMystery(cur.room, asLang(lang)),
+      hints: roomManager.hintsFor(cur.room, asLang(lang)),
+      confrontations: roomManager.confrontationsFor(cur.room, asLang(lang)),
+      searches: roomManager.searchesFor(cur.room, asLang(lang)),
+    });
+    broadcastPlayers(cur.room);
   });
 
   socket.on('card:add', ({ card }) => {
-    const room = currentRoom(socket);
-    const player = room?.players[socket.id];
-    if (!room || !player) return;
-    const added = roomManager.addCard(room, card || {}, player.name);
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    const added = roomManager.addCard(cur.room, card || {}, cur.player.name);
     if (added) {
-      roomManager.touch(room);
-      io.to(room.code).emit('card:added', { card: added, by: player.name });
+      roomManager.touch(cur.room);
+      io.to(cur.room.code).emit('card:added', { card: added, by: cur.player.name });
     }
   });
 
@@ -110,10 +139,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('card:tag', ({ cardId, tag }) => {
-    const room = currentRoom(socket);
-    const player = room?.players[socket.id];
-    if (room && player && roomManager.tagCard(room, cardId, tag)) {
-      io.to(room.code).emit('card:tagged', { cardId, tag: room.cards[cardId].statusTag ?? null, by: player.name });
+    const cur = currentPlayer(socket);
+    if (cur && roomManager.tagCard(cur.room, cardId, tag)) {
+      io.to(cur.room.code).emit('card:tagged', { cardId, tag: cur.room.cards[cardId].statusTag ?? null, by: cur.player.name });
     }
   });
 
@@ -125,13 +153,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('string:create', ({ from, to, label }) => {
-    const room = currentRoom(socket);
-    const player = room?.players[socket.id];
-    if (!room || !player) return;
-    const str = roomManager.createString(room, from, to, label, player.name);
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    const str = roomManager.createString(cur.room, from, to, label, cur.player.name);
     if (str) {
-      roomManager.touch(room);
-      io.to(room.code).emit('string:created', { string: str, by: player.name });
+      roomManager.touch(cur.room);
+      io.to(cur.room.code).emit('string:created', { string: str, by: cur.player.name });
     }
   });
 
@@ -143,17 +170,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('presence:cursor', ({ x, y }) => {
-    const room = currentRoom(socket);
-    const player = room?.players[socket.id];
-    if (!room || !player) return;
-    socket.to(room.code).emit('presence:cursor', { socketId: socket.id, name: player.name, role: player.role, x, y });
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    socket.to(cur.room.code).emit('presence:cursor', { playerId: cur.player.id, name: cur.player.name, role: cur.player.role, x, y });
   });
 
   socket.on('chat:send', ({ text, phrase }) => {
-    const room = currentRoom(socket);
-    const player = room?.players[socket.id];
-    if (!room || !player) return;
-    const msg = roomManager.addChat(room, player, text, phrase);
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    const { room } = cur;
+    const msg = roomManager.addChat(room, cur.player, text, phrase);
     if (!msg) return;
     roomManager.touch(room);
     io.to(room.code).emit('chat:message', msg);
@@ -166,14 +192,41 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('suspect:confront', ({ suspectId, evidenceId }) => {
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    const result = roomManager.confront(cur.room, String(suspectId || ''), String(evidenceId || ''), cur.player.name);
+    if (!result) return;
+    if (result.repeat) {
+      socket.emit('suspect:confronted', { entry: roomManager.localizeConfront(cur.room, result.entry, cur.player.lang), repeat: true });
+      return;
+    }
+    roomManager.touch(cur.room);
+    for (const p of Object.values(cur.room.players)) {
+      if (!p.connected) continue;
+      io.to(p.socketId).emit('suspect:confronted', {
+        entry: roomManager.localizeConfront(cur.room, result.entry, p.lang),
+        wastedConfronts: cur.room.wastedConfronts,
+      });
+    }
+  });
+
+  socket.on('room:search', ({ spotId }) => {
+    const cur = currentPlayer(socket);
+    if (!cur) return;
+    const result = roomManager.search(cur.room, String(spotId || ''), cur.player.name);
+    if (!result) return;
+    if (result.repeat) return;
+    roomManager.touch(cur.room);
+    for (const p of Object.values(cur.room.players)) {
+      if (p.connected) io.to(p.socketId).emit('room:searched', { entry: roomManager.localizeSearch(cur.room, result.entry, p.lang) });
+    }
+  });
+
   socket.on('lab:request', ({ evidenceId }) => {
     const room = currentRoom(socket);
     if (!room) return;
-    const started = roomManager.requestLab(room, String(evidenceId || ''), () => {
-      io.to(room.code).emit('lab:update', { lab: room.lab });
-      if (room.assistant) botSay(room, 'bot_lab_ready', room.lab!.unlocked[room.lab!.unlocked.length - 1]);
-    });
-    if (started) {
+    if (roomManager.requestLab(room, String(evidenceId || ''))) {
       roomManager.touch(room);
       io.to(room.code).emit('lab:update', { lab: room.lab });
     }
@@ -187,41 +240,58 @@ io.on('connection', (socket) => {
   });
 
   socket.on('case:submit', ({ submission }: { submission: AccusationSubmission }) => {
-    const room = currentRoom(socket);
-    const player = room?.players[socket.id];
-    if (!room || !player || !submission) return;
+    const cur = currentPlayer(socket);
+    if (!cur || !submission) return;
+    const { room, player } = cur;
     const outcome = roomManager.submitAccusation(room, submission);
     if (!outcome) return;
     // Each player gets the verdict in their own language.
     for (const p of Object.values(room.players)) {
-      io.to(p.socketId).emit('case:result', roomManager.resultFor(room, player.name, outcome.correctCount, p.lang));
+      if (p.connected) io.to(p.socketId).emit('case:result', roomManager.resultFor(room, player.name, outcome.correctCount, p.lang, submission));
     }
     if (room.assistant && room.status === 'active') setTimeout(() => botSay(room, 'bot_wrong'), 2500);
   });
 
   socket.on('room:leave', () => {
-    const room = roomManager.removePlayer(socket.id);
+    const room = roomManager.leave(socket.data.roomCode, socket.data.playerId);
     if (room) {
       socket.leave(room.code);
-      io.to(room.code).emit('room:players', { players: Object.values(room.players) });
+      broadcastPlayers(room);
     }
     socket.data.roomCode = undefined;
+    socket.data.playerId = undefined;
   });
 
   socket.on('disconnect', () => {
-    const room = roomManager.removePlayer(socket.id);
-    if (room) io.to(room.code).emit('room:players', { players: Object.values(room.players) });
+    // Keep the seat for a moment; a refresh or a flaky connection shouldn't end the game.
+    const room = roomManager.disconnect(socket.data.roomCode, socket.data.playerId, socket.id);
+    if (room) broadcastPlayers(room);
   });
 });
 
 setInterval(() => roomManager.sweep(6 * 60 * 60 * 1000), 10 * 60 * 1000);
 
+// A held-back clue arrives a few minutes into the case, as a new lead.
+setInterval(() => {
+  for (const room of roomManager.dueLateLeads()) {
+    roomManager.releaseLateLead(room);
+    for (const p of Object.values(room.players)) {
+      if (!p.connected) continue;
+      io.to(p.socketId).emit('room:mystery', {
+        mystery: roomManager.getMystery(room, p.lang),
+        hints: roomManager.hintsFor(room, p.lang),
+        confrontations: roomManager.confrontationsFor(room, p.lang),
+        lateLead: room.blueprint.lateEvidenceId,
+      });
+    }
+  }
+}, Math.min(5000, Math.max(1000, LATE_LEAD_MS / 4)));
+
 // The assistant nudges solo players who have gone quiet for a while.
 setInterval(() => {
   for (const room of roomManager.idleAssistantRooms(150 * 1000)) {
     botSay(room, 'bot_tip', undefined, room.nudges);
-    room.nudges += 1;
-    roomManager.touch(room);
+    roomManager.nudge(room);
   }
 }, 20 * 1000);
 

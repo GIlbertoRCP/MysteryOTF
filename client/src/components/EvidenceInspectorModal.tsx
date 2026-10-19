@@ -7,6 +7,7 @@ import { KindIcon } from './KindIcon';
 import { PuzzleView, CipherPuzzle } from './PuzzleView';
 
 const Weapon3D = lazy(() => import('./Weapon3D'));
+const Clue3D = lazy(() => import('./Clue3D'));
 
 interface Props {
   caseId: string;
@@ -76,7 +77,7 @@ export const EvidenceInspectorModal: React.FC<Props> = ({ caseId, item, me, isPi
           {item.title}
         </h2>
 
-        {item.weapon && (
+        {(item.weapon || item.model) && (
           <div className="mt-5">
             <div className="relative h-64 overflow-hidden rounded-md bg-[#1c1612]">
               <Suspense
@@ -86,12 +87,17 @@ export const EvidenceInspectorModal: React.FC<Props> = ({ caseId, item, me, isPi
                   </div>
                 }
               >
-                <Weapon3D weaponKey={item.weapon.key} residue={item.weapon.residue} lamp={lamp} />
+                {item.weapon ? (
+                  <Weapon3D weaponKey={item.weapon.key} residue={item.weapon.residue} lamp={lamp} />
+                ) : (
+                  <Clue3D model={item.model!} lamp={lamp} />
+                )}
               </Suspense>
-              <span className="pointer-events-none absolute left-3 bottom-2.5 flex items-center gap-1.5 text-[12px] text-[var(--paper)]/70">
-                <Rotate3d size={13} /> {t('w3d.hint')}
+              <span className="pointer-events-none absolute left-3 bottom-2.5 flex items-center gap-1.5 text-[12px] text-paper/75">
+                <Rotate3d size={13} /> {item.model?.type === 'watch' ? t('w3d.turnOver') : t('w3d.hint')}
               </span>
             </div>
+            {item.model?.type !== 'letter' && item.model?.type !== 'watch' && (
             <button
               onClick={() => setLamp(v => !v)}
               aria-pressed={lamp}
@@ -99,6 +105,7 @@ export const EvidenceInspectorModal: React.FC<Props> = ({ caseId, item, me, isPi
             >
               <Lamp size={15} /> {t(lamp ? 'w3d.lampOff' : 'w3d.lampOn')}
             </button>
+            )}
           </div>
         )}
 

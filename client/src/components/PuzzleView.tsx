@@ -188,6 +188,7 @@ const UV_COLORS: Record<string, string> = {
   ink: '#5fb2ff',
   cat: '#f4f7ff',
   mint: '#7dffb8',
+  planted: '#f4f7ff',
 };
 
 const UvPuzzle: React.FC<{ habit: string; seed: string; onSolved: () => void }> = ({ habit, seed, onSolved }) => {

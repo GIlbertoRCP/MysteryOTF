@@ -982,3 +982,16 @@ export const THEMES: Record<ThemeKey, Theme> = {
 };
 
 export const THEME_KEYS = Object.keys(THEMES) as ThemeKey[];
+
+/** First names drawn with feminine styling in suspect portraits; everyone else gets masculine styling. */
+const FEMININE = new Set([
+  'Evelyn', 'Clara', 'Genevieve', 'Agatha', 'Nova', 'Mira', 'Juno', 'Lena', 'Isadora', 'Henrietta', 'Odile', 'Rosa',
+  'Ruby', 'Delilah', 'Gloria', 'Ivy', 'Daisy', 'Agnes', 'Lucia', 'Beatrix', 'Soledad', 'Carmen', 'Valeria', 'Rosario',
+  'Vera', 'Peggy', 'Rita', 'Edith', 'Petra', 'Sasha', 'Colette', 'Nadia', 'Isabella', 'Giulia', 'Chiara', 'Marguerite',
+]);
+const TITLES = /^(dr\.|don|doña|padre|fra|sister|count|colonel|professor|general|maestro|lord|lady|baron|duchess|captain|ambassador|signor|signora|madame|contessa|commander)$/i;
+
+export function portraitLook(name: string): 'f' | 'm' {
+  const first = name.split(/\s+/).find(w => !TITLES.test(w)) ?? '';
+  return FEMININE.has(first) ? 'f' : 'm';
+}

@@ -19,6 +19,8 @@ export type EvidenceKind =
   | 'scrapings'
   | 'receipt'
   | 'sighting'
+  | 'planted'
+  | 'claim'
   | 'weapon';
 
 // ─── What clients receive (already localized, never contains the solution) ───
@@ -32,6 +34,8 @@ export interface PublicSuspect {
   bio: string;
   alibiPlace: string;
   alibiRoomId: string;
+  /** Styling hint for the drawn portrait */
+  look: 'f' | 'm';
   alibiStatement: string;
   traits: Record<TraitDim, string>;
   traitKeys: Record<TraitDim, string>;
@@ -51,6 +55,12 @@ export interface PublicEvidence {
   puzzle?: Puzzle;
   /** For recovered items: which object it is, and whether it was wiped after use */
   weapon?: { key: string; residue: boolean };
+  /** Recovered items have to be found first, by searching this spot on the floor plan */
+  spotId?: string;
+  /** Alibi checks: the suspects this record vouches for */
+  confirms?: string[];
+  /** A 3D object to turn over in the inspector */
+  model?: { type: 'watch'; min: number; engraving: string } | { type: 'monogram'; item: string; initials: string } | { type: 'letter'; seal: string };
 }
 
 export type Puzzle =
@@ -72,6 +82,8 @@ export interface PlanRoomPublic {
   door: { x: number; y: number };
   /** Minutes on foot to the crime scene */
   walk: number;
+  /** Places worth searching in this room */
+  spots: { id: string; label: string }[];
 }
 
 export interface PublicPlan {
@@ -99,6 +111,8 @@ export interface PublicMystery {
     windowEnd: number;
   };
   plan: PublicPlan;
+  /** A complication on this case, explained in the briefing */
+  modifier: { key: 'blackout' | 'storm' | 'tampered'; label: string; note: string } | null;
   synopsis: string;
   suspects: PublicSuspect[];
   evidence: PublicEvidence[];
@@ -145,10 +159,14 @@ export interface BoardString {
 }
 
 export interface Player {
+  /** Stable per browser, so a reconnect gets the same seat back */
+  id: string;
   socketId: string;
   name: string;
   role: Role;
   lang: Lang;
+  /** False while the player is briefly disconnected and their seat is being held */
+  connected: boolean;
 }
 
 export const CHAT_PHRASES = [
@@ -197,6 +215,30 @@ export interface PublicRoom {
   maxHints: number;
   score: number | null;
   finishedAt: number | null;
+  /** Confrontations that went nowhere; each costs points */
+  wastedConfronts: number;
+}
+
+/** A clue presented to a suspect, and how they reacted (in the reader's language). */
+export interface ConfrontEntry {
+  suspectId: string;
+  evidenceId: string;
+  by: string;
+  kind: 'admit' | 'cleared' | 'confess' | 'slip' | 'deflect';
+  cracked: boolean;
+  line: string;
+  /** A question unlocked by cracking them, with its answer */
+  followUp?: { q: string; a: string };
+  at: number;
+}
+
+/** A spot searched on the floor plan, shared by both players. */
+export interface SearchEntry {
+  spotId: string;
+  by: string;
+  text: string;
+  found: string[];
+  at: number;
 }
 
 export interface AccusationSubmission {
@@ -219,4 +261,12 @@ export interface AccusationResult {
   score?: number;
   elapsedMs?: number;
   hintsUsed: number;
+  /** Once the case is closed: what really happened, in order */
+  story?: { min: number; text: string }[];
+  wastedConfronts?: number;
+  spotsSearched?: number;
+  /** What was accused, so both players can watch it play out */
+  submission?: AccusationSubmission;
+  /** Innocents the killer tried to pin it on (planted item or a pointed finger) */
+  framedIds?: string[];
 }

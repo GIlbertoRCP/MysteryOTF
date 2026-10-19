@@ -1,4 +1,6 @@
-# One Render web service runs the game server and serves the built client.
+# One Render web service runs the game server and serves the built client,
+# and a free Key Value (Redis-compatible) store keeps cases alive across
+# restarts, sleeps and redeploys.
 # On Render: New > Blueprint, pick this repository, and it reads this file.
 services:
   - type: web
@@ -8,6 +10,21 @@ services:
     buildCommand: npm run setup && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
+    # Only deploy a commit once the GitHub Actions checks on it have passed.
+    autoDeployTrigger: checksPass
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: detective-board-store
+          property: connectionString
+
+  - type: keyvalue
+    name: detective-board-store
+    plan: free
+    # Empty allow list: only services inside this Render account can connect.
+    ipAllowList: []
+    # If the free store ever fills up, drop the oldest cases instead of refusing new ones.
+    maxmemoryPolicy: allkeys-lru
